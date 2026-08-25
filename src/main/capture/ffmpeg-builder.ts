@@ -91,6 +91,12 @@ export function buildCaptureArgs(input: BuildInput): BuiltCommand {
   let cameraInput = -1
   let windowInput = -1
 
+  // NOTE on alignment: each input's t=0 is its own open moment, so the mic
+  // and system tracks carry a relative offset measured at ~120-230 ms on
+  // REF-01 (mic lags, direction stable; sync harness). A wallclock-timestamp
+  // experiment to unify the clocks BROKE the recording outright (M-010) and
+  // was reverted. Correction is a Phase 2 item; the offset is documented in
+  // docs/risks.md R-11.
   if (config.microphone) {
     args.push(
       '-f', 'dshow',

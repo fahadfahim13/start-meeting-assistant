@@ -155,3 +155,25 @@ ring exactly as designed — the mechanism was genuinely exercised rather than m
 Heavy load (transcription running concurrently, disk contention) has not been tested, though
 ADR-006 makes that combination unlikely by design since processing is post-meeting. The drop
 counter must surface in the UI so a future regression is visible rather than silent.
+
+---
+
+### R-11 · Mic ↔ system-audio relative offset (~120 ms, mic lags) 🟡
+
+**Added:** 2026-08-25 · **Phase:** 2 · **Status:** open, measured, bounded
+
+Each ffmpeg input's t=0 is its own open moment, so the mic (dshow) and system (named-pipe PCM)
+tracks carry a relative offset. Measured by the sync harness (tone burst, digital vs acoustic
+path, cross-correlation): **119 / 232 / 127 / 116 ms across four runs — mic always lags.**
+Direction is stable; magnitude clusters at ~120 ms with occasional outliers suspected to be
+correlation echo artifacts rather than real variance.
+
+**Impact.** Transcript merging attributes words across the two tracks with up to ~0.2 s skew —
+marginal at sentence granularity, visible at word granularity. Not a recording-integrity issue.
+
+**Why not already fixed.** The obvious unification (`-use_wallclock_as_timestamps 1` on both
+audio inputs) breaks the recording outright — see MISTAKES.md M-010.
+
+**Phase 2 candidates, in test order:** measured static `-itsoffset` on the system input
+(handles the systematic ~120 ms), smaller `-audio_buffer_size`, `aresample=async=1`, and
+re-measuring outliers with a single-pip burst to rule out correlation artifacts.

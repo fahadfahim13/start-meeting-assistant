@@ -216,3 +216,23 @@ the `content-length` from a HEAD request before declaring success.
 is not "done" when the process exits — it is done when the byte count (better: the hash)
 matches the expected value. This is precisely why the app's model manager (Phase 7 spec)
 verifies size and SHA-256 before marking any model usable; this incident is the evidence.
+
+---
+
+## M-010 — use_wallclock_as_timestamps on the audio inputs breaks the whole recording
+
+**Date:** 2026-08-25  **Area:** capture/sync  **Cost:** ~30 min, one broken test recording
+**Symptom:** after adding `-use_wallclock_as_timestamps 1` to the mic and pipe inputs to unify
+their clocks, the system-audio track came out EMPTY (sync harness: snr -Infinity), while the
+same command without the flag records all four streams correctly.
+**Cause:** wallclock stamps put the audio inputs at epoch-scale timestamps while ddagrab video
+stays 0-based. The muxer cannot interleave streams ~1.7 billion seconds apart; the system
+track never received a usable packet.
+**Fix:** reverted. The underlying mic↔system offset (~120 ms systematic, occasional outliers,
+mic always lagging — measured runs: 119 / 232 / 127 / 116 ms) is documented as risk R-11 and
+deferred to Phase 2, where the candidates are a measured static `-itsoffset` on the system
+input, `audio_buffer_size` reduction, and `aresample=async=1`.
+**Verified:** revert → sync harness immediately back to 116.1 ms with all tracks present.
+**Rule:** never change the timestamp DOMAIN of a subset of inputs feeding one muxer. Align
+clocks either for every input or for none. And a sync "fix" that has not been re-measured is
+not a fix (the harness caught this in one run).
