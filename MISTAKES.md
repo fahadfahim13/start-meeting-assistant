@@ -77,7 +77,34 @@ does not generalize to Windows.
 Audio is not independently requestable from a display-capture source.
 **Fix:** request `{video: true, audio: true}`, then immediately `.stop()` and discard the
 video track, keeping only the audio track.
-**Verified:** pending spike 1.
+**Verified:** spike 1 on 2026-08-25. The `{video:true, audio:true}` + discard-video pattern
+returns 1 video track and 1 audio track; the audio track carries the real system mix
+(benchmarks B-005).
 **Rule:** loopback audio rides along with a display capture; it is not a standalone source.
 Also: Electron loopback is version-fragile (40.1.0 reportedly regressed to silence) —
 pin the Electron version exactly and guard it with a CI smoke test.
+
+---
+
+## M-004 — Electron produces no stdout to the parent shell on Windows
+
+**Date:** 2026-08-25  **Area:** tooling/CI  **Cost:** ~20 min, and would have silently
+broken the CI smoke test
+**Symptom:** `npm start` and `electron .` both exited 0 with **zero bytes** of captured output.
+The app had in fact run correctly the whole time — it created its output directory, captured
+1.29 MB of PCM and wrote `result.json`. None of its `console.log` output reached the terminal.
+**Cause:** the Electron launcher on Windows is a GUI-subsystem binary. It is not attached to
+the parent console, so main-process stdout and stderr go nowhere when spawned from a shell.
+**Fix:** do not rely on stdout for spike or test results. Write results to a file
+(`out/result.json`) and communicate pass/fail through the **process exit code**. For interactive
+debugging, `electron . --enable-logging` routes output to the console.
+**Verified:**
+```bash
+./node_modules/.bin/electron .     # exit 0, no stdout at all
+cat out/result.json                # the actual result was here the whole time
+```
+**Rule:** on Windows, a GUI-subsystem process cannot be observed through stdout. Any automated
+check involving Electron must assert on **exit codes and files**, never on captured console
+output. This directly affects the loopback smoke test in `.github/workflows/ci.yml` — it asserts
+via `--assert-non-silent` setting the exit code, which is correct; a log-grep assertion there
+would have passed vacuously forever.

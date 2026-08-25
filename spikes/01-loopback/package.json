@@ -1,0 +1,14 @@
+{
+  "name": "spike-01-loopback",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Phase 0b spike 1 - can Electron capture non-silent system audio via WASAPI loopback?",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "ci": "electron . --ci --assert-non-silent"
+  },
+  "devDependencies": {
+    "electron": "44.0.0"
+  }
+}

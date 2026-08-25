@@ -126,10 +126,21 @@ npm run spike:4        # llama.cpp Vulkan benchmark
 
 ## Current state
 
-**Phase 0a complete / 0b in progress.** See `PROGRESS.md`.
+**Phase 0a complete. Phase 0b in progress — spike 1 PASSED, the hard gate is cleared.**
+See `PROGRESS.md`.
 
-Phase 0b spike 1 (Electron loopback audio) is a **hard gate**. If it fails, the architecture
-changes and nothing beyond Phase 0 should be written. Do not start Phase 1 before it passes.
+Electron 44.0.0 captures real system audio via WASAPI loopback: 48 kHz stereo, zero dropped
+frames, test tone verified at 6219x the noise floor (benchmarks B-005). ADR-002 stands.
+
+Spikes 2-4 remain. Do not start Phase 1 until they have produced measurements.
+
+### Two things that will bite you
+
+- **Electron produces no stdout on Windows** (MISTAKES.md M-004). It is a GUI-subsystem binary.
+  Assert on **exit codes and files**, never on captured console output. Use
+  `electron . --enable-logging` for interactive debugging.
+- **`h264_amf` needs an explicit nv12 conversion** (MISTAKES.md M-001). The recipe above is not
+  optional styling.
 
 ## Per-phase discipline
 

@@ -9,22 +9,6 @@ marked `retired`, with the evidence that retired it — so the reasoning stays v
 
 ## Active
 
-### R-01 · Electron loopback audio broken on the pinned version 🔴
-
-**Probability:** medium · **Phase:** 0, 1 · **Status:** open — this is the Phase 0 gate
-
-Desktop audio is a critical requirement and Chromium loopback is the only driver-free way to get
-it on Windows. Electron loopback support is version-fragile; 40.1.0 reportedly regressed
-desktop-capture audio to silence
-([electron#49607](https://github.com/electron/electron/issues/49607)).
-
-**Mitigation.** Phase 0 spike 1 is a hard gate — no app code until it passes. Electron version
-pinned exactly. CI smoke test guards against regression on upgrade. Five-rung fallback ladder:
-native loopback → `electron-audio-loopback` → virtual audio cable → obs-websocket → record
-without system audio and warn loudly.
-
-**Trigger for escalation.** If spike 1 fails, stop and revisit ADR-002 before writing app code.
-
 ### R-02 · whisper.cpp Vulkan slow or broken on Vega 7 🟠
 
 **Probability:** medium · **Phase:** 0, 3 · **Status:** open
@@ -136,5 +120,22 @@ native addons). This is why the tracking files exist at all.
 
 ## Retired
 
-*None yet. Risks move here with the evidence that retired them — typically a benchmark ID or a
-passing verification step.*
+### R-01 · Electron loopback audio broken on the pinned version 🔴 → retired 2026-08-25
+
+**Was:** desktop audio is a critical requirement and Chromium loopback is the only driver-free way
+to get it on Windows. Electron loopback support is version-fragile; 40.1.0 reportedly regressed
+desktop-capture audio to silence
+([electron#49607](https://github.com/electron/electron/issues/49607)). This was the Phase 0 hard
+gate — if it failed, ADR-002 was invalid and the capture architecture would have changed.
+
+**Retired by:** [benchmarks B-005](benchmarks.md). Electron 44.0.0 (Chromium 152.0.7977.54)
+captured 336 frames / 645 120 samples of real system audio at 48 kHz stereo with a sample
+completeness of 1.0031 — no dropped frames. Goertzel analysis confirmed the captured stream
+contains the 440 Hz and 660 Hz test tones at 6 219× and 3 286× the noise floor, with every other
+probed frequency at floor. The capture is the genuine system mix.
+
+**Residual risk, still guarded.** This validates Electron 44.0.0 only. The version is pinned,
+Dependabot ignores `electron`, and the CI loopback smoke test asserts non-silent capture on every
+PR. The five-rung fallback ladder (native loopback → `electron-audio-loopback` → virtual audio
+cable → obs-websocket → record without system audio) remains documented in
+[architecture.md](architecture.md) in case a future upgrade regresses.

@@ -25,7 +25,7 @@ Blocked and deferred rows **must** carry a reason.
 | 0a · `docs/` tree | ✅ | architecture, benchmarks (**seeded with B-001…B-004 real measurements**), setup, troubleshooting, risks, testing, legal |
 | 0a · Repo config files | ✅ | `.gitignore`, `.nvmrc`, `.editorconfig`, `.env.example` |
 | 0a · Initial commit | ✅ | 31 files |
-| **0b · Spike 1 — Electron loopback audio** | ⬜ | **HARD GATE — blocks everything downstream** |
+| **0b · Spike 1 — Electron loopback audio** | ✅ | **GATE CLEARED.** Electron 44.0.0 captures real system audio. Tone verified at 6219× noise floor, zero dropped frames. See benchmarks B-005 |
 | 0b · Spike 2 — PCM → ffmpeg stdin pipe | ⬜ | 5 min recording, measure drift + underruns |
 | 0b · Spike 3 — whisper.cpp Vulkan benchmark | ⬜ | build `-DGGML_VULKAN=1`; Vega 7 is GCN5, **measure, do not assume** |
 | 0b · Spike 4 — llama.cpp Vulkan benchmark | ⬜ | expect ~76 t/s prompt, ~10 t/s generation |
