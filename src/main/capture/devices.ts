@@ -2,13 +2,9 @@ import { desktopCapturer } from 'electron'
 import { execFile } from 'node:child_process'
 import type { DeviceInventory } from '@shared/schemas/devices'
 import { resolveBinary } from '@main/platform/binaries'
+import { reconcile } from './reconcile'
 
-/**
- * Device enumeration and the WebRTC ↔ DirectShow name reconciliation
- * (docs/risks.md R-06). The two APIs usually agree on the friendly name, but
- * Chromium sometimes appends a " (vid:pid)" USB suffix that DirectShow does
- * not use, so matching is: exact → suffix-stripped → substring.
- */
+/** Device enumeration; name reconciliation itself lives in ./reconcile (pure). */
 
 interface DshowDevices {
   video: string[]
@@ -36,20 +32,6 @@ export async function listDshowDevices(): Promise<DshowDevices> {
       },
     )
   })
-}
-
-/** Chromium may append " (04f2:b6f1)"-style USB ids that dshow names lack. */
-function stripUsbSuffix(label: string): string {
-  return label.replace(/\s*\([0-9a-f]{4}:[0-9a-f]{4}\)\s*$/i, '').trim()
-}
-
-export function reconcile(webrtcLabel: string, dshowNames: string[]): string | null {
-  if (dshowNames.includes(webrtcLabel)) return webrtcLabel
-  const stripped = stripUsbSuffix(webrtcLabel)
-  const exact = dshowNames.find((n) => n === stripped)
-  if (exact) return exact
-  const partial = dshowNames.find((n) => n.includes(stripped) || stripped.includes(n))
-  return partial ?? null
 }
 
 const VIRTUAL_MARKERS = ['obs virtual', 'virtual camera', 'droidcam', 'snap camera', 'manycam']
