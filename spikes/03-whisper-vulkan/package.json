@@ -1,0 +1,11 @@
+{
+  "name": "spike-03-whisper-vulkan",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Phase 0b spike 3 - whisper.cpp CPU vs Vulkan on a Vega 7 iGPU",
+  "type": "module",
+  "scripts": {
+    "bench:cpu": "node bench.mjs --whisper bin-cpu/Release/whisper-cli.exe --model models/ggml-large-v3-turbo-q5_0.bin --label cpu",
+    "bench:vulkan": "node bench.mjs --whisper bin-vulkan/whisper-cli.exe --model models/ggml-large-v3-turbo-q5_0.bin --label vulkan"
+  }
+}

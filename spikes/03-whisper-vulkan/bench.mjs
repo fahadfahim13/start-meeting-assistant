@@ -62,10 +62,10 @@ function ensureAudio() {
     console.log(`using existing audio: ${AUDIO} (${statSync(AUDIO).size} bytes)`)
     return
   }
-  const sample = path.join(path.dirname(WHISPER), '..', 'samples', 'jfk.wav')
+  const sample = path.join(__dirname, 'samples', 'jfk.wav')
   if (!existsSync(sample)) {
-    console.error(`benchmark audio missing and whisper sample not found at ${sample}`)
-    console.error(`generate one yourself and pass --audio`)
+    console.error(`benchmark audio missing and sample not found at ${sample}`)
+    console.error(`fetch it: curl -L -o samples/jfk.wav https://raw.githubusercontent.com/ggml-org/whisper.cpp/master/samples/jfk.wav`)
     process.exit(2)
   }
   console.log('building 10-minute benchmark audio from jfk.wav...')
