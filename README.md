@@ -1,0 +1,118 @@
+# MeetFroge
+
+**A local-first meeting recorder, transcriber, visual analyzer and summarizer.**
+
+Records your meetings — camera, screen, microphone and desktop audio — then transcribes them,
+reads what was on screen, and writes you a summary. Everything runs on your own machine.
+No cloud, no accounts, no API keys, no subscription.
+
+> **Status: pre-alpha.** Under active development. Not yet usable. See [PROGRESS.md](PROGRESS.md).
+
+---
+
+## Why
+
+Meeting recorders either send your conversations to someone else's server, charge a monthly fee,
+or both. MeetFroge does neither. Your meetings are yours: recorded to standard MKV, transcribed
+locally, indexed in a plain SQLite database on your disk.
+
+## What it does
+
+- **Records everything at once** — screen or window, camera, your microphone, and the audio from
+  the meeting itself, in a single file with separate tracks.
+- **Transcribes locally** with Whisper, hardware-accelerated where possible.
+- **Knows who spoke.** Your microphone track is you; the system-audio track is everyone else.
+  That split is exact, not a guess. Remote speakers are then separated from each other.
+- **Reads your screen.** Detects when the screen actually changed — a new slide, a different app —
+  and runs OCR and a vision model on those moments, so you can search a meeting by text that was
+  only ever on a slide.
+- **Summarizes** into key points, decisions and action items, each linked back to the moment it
+  was said.
+- **Keeps it all searchable** across every meeting you have ever recorded.
+
+## Privacy
+
+This is the point of the project, so it is stated precisely:
+
+1. **No telemetry.** Not opt-out — absent. There is no analytics code in this repository, and CI
+   fails if any is added.
+2. **No runtime network calls**, except model downloads you explicitly start.
+3. **All processing is local.** Pull the network cable and everything still works.
+4. **Recording is always visible** and cannot be hidden by any setting.
+5. **Crash logs stay on your disk** and are never transmitted.
+
+Optional AES-256-GCM encryption at rest is available, with the key wrapped by Windows DPAPI.
+See [PRIVACY.md](PRIVACY.md) for what that does and does not protect against — we are specific
+about the limits rather than vague about the guarantees.
+
+## Requirements
+
+| | Minimum | Recommended |
+|---|---|---|
+| OS | Windows 10 20H2+ | Windows 11 |
+| CPU | 4 cores | 6+ cores |
+| RAM | 8 GB | 16 GB+ |
+| Disk | 15 GB free | 50 GB+ |
+| GPU | none (CPU fallback) | any Vulkan-capable GPU, discrete or integrated |
+
+Models are downloaded on first run (~4.7 GB). The app works without a GPU — just slower.
+
+Linux and macOS are planned; the capture layer is already isolated behind an interface for that.
+See [ROADMAP.md](ROADMAP.md).
+
+## Install
+
+Not yet released. Once available, download the installer from
+[Releases](https://github.com/fahadfahim13/meetfroge/releases).
+
+The installer is currently unsigned, so Windows SmartScreen will warn on first run
+("More info" → "Run anyway"). Verify the SHA-256 checksum published with each release.
+
+## Build from source
+
+```bash
+git clone https://github.com/fahadfahim13/meetfroge.git
+cd meetfroge
+nvm use          # Node 22.13.1
+npm ci
+npm run dev
+```
+
+Full setup, including building whisper.cpp and llama.cpp with Vulkan, is in
+[docs/setup.md](docs/setup.md).
+
+## How it is built
+
+| Layer | Tool |
+|---|---|
+| Shell | Electron 44 (pinned) + React + TypeScript |
+| Recording | ffmpeg — Desktop Duplication capture, hardware H.264 encode |
+| Desktop audio | Chromium WASAPI loopback → PCM → ffmpeg |
+| Transcription | whisper.cpp (Vulkan-accelerated) |
+| VAD + diarization | sherpa-onnx |
+| OCR | tesseract.js |
+| Vision + summary | llama.cpp `llama-server` — SmolVLM2, Qwen3-4B |
+| Storage | SQLite (better-sqlite3) with FTS5 |
+
+No Python, no PyTorch, no cloud services. Architecture and the reasoning behind each choice are
+in [docs/architecture.md](docs/architecture.md) and [DECISIONS.md](DECISIONS.md).
+
+## Contributing
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+If you are touching the capture engine, read [MISTAKES.md](MISTAKES.md) first. It records the
+non-obvious failures already discovered, so you do not have to rediscover them.
+
+## Security
+
+Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
+
+## License
+
+[GPL-3.0-or-later](LICENSE).
+
+MeetFroge bundles ffmpeg built with libx264 (GPL), which is the CPU encoding fallback for
+machines without hardware encoders. See [ADR-009](DECISIONS.md#adr-009--gpl-30-or-later) for
+the full reasoning. Third-party licenses are listed in `THIRD_PARTY_NOTICES.md`, generated at
+build time.

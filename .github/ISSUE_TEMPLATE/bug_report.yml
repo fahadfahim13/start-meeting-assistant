@@ -1,0 +1,101 @@
+name: Bug report
+description: Something is broken or behaves unexpectedly
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this.
+
+        **Do not report security vulnerabilities here.** Use a
+        [private security advisory](https://github.com/fahadfahim13/meetfroge/security/advisories/new) instead.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Select camera X and screen Y
+        2. Start recording
+        3. After ~5 minutes, ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Recording / capture
+        - Desktop audio
+        - Transcription
+        - Speaker identification
+        - Visual analysis / OCR
+        - Summarization
+        - Library / search
+        - Settings / models
+        - Installation / first run
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostic bundle
+      description: |
+        Settings → Logs → Copy diagnostic bundle, then paste here.
+
+        It contains timings, error codes and ffmpeg arguments with paths redacted.
+        It contains **no meeting content** — transcript, OCR and model output are never logged.
+      render: text
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: MeetFroge version
+      placeholder: "0.1.0, or a commit SHA if running from source"
+    validations:
+      required: true
+
+  - type: textarea
+    id: system
+    attributes:
+      label: System
+      description: OS version, CPU, GPU, RAM. The capability summary from Settings → System is ideal.
+      placeholder: |
+        Windows 11 Pro 26200
+        AMD Ryzen 5 5500U, 23 GB RAM
+        AMD Radeon integrated (Vega 7), Vulkan present
+        Encoder in use: h264_amf
+    validations:
+      required: true
+
+  - type: input
+    id: duration
+    attributes:
+      label: Meeting duration and quality preset
+      description: Relevant for anything involving recording — many issues only appear on long recordings.
+      placeholder: "45 min, Balanced"
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I checked [docs/troubleshooting.md](../blob/main/docs/troubleshooting.md)
+          required: true
+        - label: I searched existing issues
+          required: true
+        - label: This is not a security vulnerability
+          required: true

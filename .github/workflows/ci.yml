@@ -1,0 +1,121 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Runs even before the app scaffold exists, so the repo is never in a
+  # "CI is red because there is no code yet" state.
+  docs:
+    name: Docs and hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Required tracking files are present
+        run: |
+          missing=0
+          for f in CLAUDE.md MISTAKES.md PROGRESS.md DECISIONS.md LICENSE \
+                   README.md SECURITY.md PRIVACY.md CONTRIBUTING.md \
+                   CODE_OF_CONDUCT.md CHANGELOG.md ROADMAP.md \
+                   docs/architecture.md docs/benchmarks.md docs/setup.md \
+                   docs/risks.md docs/testing.md docs/troubleshooting.md docs/legal.md ; do
+            if [ ! -f "$f" ]; then echo "MISSING: $f"; missing=1; fi
+          done
+          exit $missing
+
+      - name: No telemetry packages
+        run: |
+          if [ -f package.json ]; then
+            if grep -Eiq '"(analytics|mixpanel|amplitude|segment|posthog|@sentry/[a-z]+|google-analytics|hotjar)"' package.json; then
+              echo "A telemetry or analytics package was added. This violates the project privacy commitment (see PRIVACY.md)."
+              exit 1
+            fi
+          fi
+          echo "OK"
+
+  build:
+    name: Build and test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for app scaffold
+        id: scaffold
+        shell: bash
+        run: |
+          if [ -f package.json ]; then echo "exists=true" >> "$GITHUB_OUTPUT";
+          else echo "exists=false" >> "$GITHUB_OUTPUT"; echo "No package.json yet (Phase 0). Skipping build."; fi
+
+      - uses: actions/setup-node@v4
+        if: steps.scaffold.outputs.exists == 'true'
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install
+        if: steps.scaffold.outputs.exists == 'true'
+        run: npm ci
+
+      - name: Typecheck
+        if: steps.scaffold.outputs.exists == 'true'
+        run: npm run typecheck
+
+      - name: Lint
+        if: steps.scaffold.outputs.exists == 'true'
+        run: npm run lint
+
+      - name: Unit and integration tests
+        if: steps.scaffold.outputs.exists == 'true'
+        run: npm run test
+
+      - name: Security tests (IPC boundary)
+        if: steps.scaffold.outputs.exists == 'true'
+        run: npm run test:security
+
+      - name: Performance budgets
+        if: steps.scaffold.outputs.exists == 'true'
+        run: npm run test:perf
+
+      - name: Audit
+        if: steps.scaffold.outputs.exists == 'true'
+        run: npm audit --audit-level=high
+
+      - name: Build
+        if: steps.scaffold.outputs.exists == 'true'
+        run: npm run build
+
+  # The single most important regression guard in the project.
+  # Electron loopback audio is version-fragile; 40.1.0 reportedly regressed it to silence.
+  # See MISTAKES.md M-003 and docs/risks.md R-01.
+  loopback-smoke:
+    name: Loopback audio smoke test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for spike
+        id: spike
+        shell: bash
+        run: |
+          if [ -f spikes/01-loopback/package.json ]; then echo "exists=true" >> "$GITHUB_OUTPUT";
+          else echo "exists=false" >> "$GITHUB_OUTPUT"; echo "Loopback spike not yet implemented (Phase 0b). Skipping."; fi
+
+      - uses: actions/setup-node@v4
+        if: steps.spike.outputs.exists == 'true'
+        with:
+          node-version-file: .nvmrc
+
+      - name: Verify loopback audio capture is non-silent
+        if: steps.spike.outputs.exists == 'true'
+        run: npm run spike:1 -- --ci --assert-non-silent

@@ -1,0 +1,53 @@
+# dependencies
+node_modules/
+.pnp.*
+
+# build output
+dist/
+dist-electron/
+out/
+release/
+*.tsbuildinfo
+
+# user data — never commit recordings or models
+recordings/
+models/
+data/
+*.mkv
+*.mp4
+*.wav
+*.gguf
+*.bin
+*.onnx
+*.traineddata
+
+# bundled binaries (fetched at build time, pinned by hash)
+resources/bin/
+
+# logs
+logs/
+*.log
+npm-debug.log*
+
+# test artifacts
+coverage/
+playwright-report/
+test-results/
+!tests/fixtures/**
+
+# spikes produce throwaway output
+spikes/**/out/
+spikes/**/*.pcm
+
+# env
+.env
+.env.local
+!.env.example
+
+# editors / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

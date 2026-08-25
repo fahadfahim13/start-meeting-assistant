@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+
+      - name: Verify
+        run: |
+          npm run typecheck
+          npm run lint
+          npm run test
+
+      - name: Fetch and verify bundled binaries
+        # ffmpeg, whisper-cli, llama-server — pinned by version and SHA-256
+        # in binaries.lock.json. A mismatch fails the release.
+        run: npm run fetch:binaries -- --verify-only-strict
+
+      - name: Build installer
+        run: npm run build:installer
+
+      - name: Generate third-party notices
+        run: npm run licenses:generate
+
+      - name: Generate SBOM
+        run: npx --yes @cyclonedx/cyclonedx-npm --output-file sbom.json
+
+      - name: Checksums
+        shell: bash
+        run: |
+          cd release
+          sha256sum *.exe > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: |
+            release/*.exe
+            release/SHA256SUMS.txt
+            sbom.json
+            THIRD_PARTY_NOTICES.md
+          body: |
+            ## Verify your download
+
+            Compare the SHA-256 of the installer against `SHA256SUMS.txt`:
+
+            ```powershell
+            Get-FileHash .\MeetFroge-Setup.exe -Algorithm SHA256
+            ```
+
+            The installer is **unsigned**, so Windows SmartScreen will warn on first run
+            ("More info" then "Run anyway"). Checksum verification is how you confirm
+            the download is genuine. See docs/risks.md for the reasoning.

@@ -1,0 +1,46 @@
+name: Feature request
+description: Suggest a capability or improvement
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before suggesting, please check:
+
+        - [ROADMAP.md](../blob/main/ROADMAP.md) — it may already be planned, or explicitly out of scope
+        - [DECISIONS.md](../blob/main/DECISIONS.md) — it may have been considered and rejected, with reasons
+
+        Reversing a past decision is fine. Knowing it was a decision helps the discussion.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve
+      description: Describe the situation, not the solution. What are you unable to do today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+
+  - type: checkboxes
+    id: principles
+    attributes:
+      label: Compatibility with project principles
+      description: |
+        MeetFroge is local-first by design. Features requiring a server, an account, telemetry,
+        or a paid service are out of scope — see the non-goals in ROADMAP.md.
+      options:
+        - label: This works fully offline
+        - label: This requires no account or server
+        - label: This adds no telemetry or usage tracking
+        - label: This works on a low-power laptop without a discrete GPU

@@ -1,0 +1,34 @@
+# Normalize to LF in the repository. The .editorconfig sets end_of_line = lf;
+# this makes git enforce it, which matters for the planned Linux port and for
+# shell scripts executed in CI.
+* text=auto eol=lf
+
+# Windows-only scripts need CRLF to run correctly.
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
+
+# Binary — never touch.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.ico  binary
+*.icns binary
+*.gif  binary
+*.webp binary
+*.mkv  binary
+*.mp4  binary
+*.wav  binary
+*.gguf binary
+*.bin  binary
+*.onnx binary
+*.traineddata binary
+*.exe  binary
+*.dll  binary
+*.node binary
+
+# Keep generated files out of diffs and language stats.
+package-lock.json      -diff linguist-generated
+THIRD_PARTY_NOTICES.md -diff linguist-generated
+sbom.json              -diff linguist-generated
+LICENSE                linguist-vendored

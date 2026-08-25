@@ -1,0 +1,34 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    # Grouped so a week of routine bumps is one reviewable PR rather than fifteen.
+    groups:
+      dev-dependencies:
+        dependency-type: development
+        update-types: [minor, patch]
+      production-patch:
+        dependency-type: production
+        update-types: [patch]
+    ignore:
+      # Electron is pinned deliberately. Loopback audio support is version-fragile
+      # (40.1.0 reportedly regressed it to silence). Upgrades are manual and must be
+      # accompanied by a passing loopback smoke test.
+      # See DECISIONS.md ADR-002, MISTAKES.md M-003, docs/risks.md R-01.
+      - dependency-name: electron
+    commit-message:
+      prefix: "chore"
+      include: scope
+    labels: ["dependencies"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "chore"
+    labels: ["dependencies", "ci"]
