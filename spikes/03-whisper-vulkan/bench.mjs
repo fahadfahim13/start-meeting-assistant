@@ -127,7 +127,10 @@ const combined = stderr + stdout
 
 // whisper.cpp announces its backend at startup. This is the only reliable way to
 // confirm Vulkan is actually in use - the binary falls back to CPU silently.
-const vulkanDetected = /vulkan/i.test(combined)
+// NOTE: must match a device-INIT line, not just the word "vulkan" - the build
+// banner prints "VULKAN = 0/1" in every run, which made the loose /vulkan/i
+// report true even for the CPU binary (caught reading B-007).
+const vulkanDetected = /ggml_vulkan:.*(?:Found|device)|using\s+Vulkan|Vulkan\d+\s*:/i.test(combined)
 const backendLines = combined
   .split(/\r?\n/)
   .filter((l) => /ggml_vulkan|using .* backend|device \d|whisper_backend_init|BLAS|Metal|CUDA/i.test(l))

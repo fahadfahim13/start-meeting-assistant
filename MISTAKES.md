@@ -198,3 +198,21 @@ aligned with the other inputs to within one frame (20 ms).
 **Verified:** E2E divergence 407 ms → 56 ms, inside the 100 ms budget.
 **Rule:** a buffer that exists to absorb jitter must not also carry HISTORY across a
 lifecycle boundary. On attach, start clean.
+
+---
+
+## M-009 — Piped exit codes reported a truncated 2.5 GB download as success
+
+**Date:** 2026-08-25  **Area:** tooling/downloads  **Cost:** one wasted benchmark run
+**Symptom:** the Qwen model download task "completed, exit 0", but llama-bench failed with
+`failed to load model`. The file was 1.66 GB of an expected 2.50 GB — truncated at 67%.
+**Cause:** two stacked mistakes. (1) `curl --max-time 3000` hit its own timeout mid-transfer.
+(2) The command was `curl ... | tail -1; echo EXIT=$?` — `$?` captured **tail's** exit code,
+not curl's, so the timeout (exit 28) was invisible.
+**Fix:** re-run with curl unpiped, capture `$?` directly, and compare the byte count against
+the `content-length` from a HEAD request before declaring success.
+**Verified:** HEAD reports 2 497 280 736 bytes; the check now compares against that exactly.
+**Rule:** an exit code read after a pipeline belongs to the LAST command in it. And a download
+is not "done" when the process exits — it is done when the byte count (better: the hash)
+matches the expected value. This is precisely why the app's model manager (Phase 7 spec)
+verifies size and SHA-256 before marking any model usable; this incident is the evidence.

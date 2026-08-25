@@ -216,13 +216,47 @@ are retired.
 
 ---
 
+### B-007 — whisper.cpp CPU baseline ✅ measured
+
+**Date:** 2026-08-25 · **Spike:** 3 · **Binary:** official `whisper-bin-x64.zip` v1.9.2 (CPU)
+
+| | |
+|---|---|
+| Model | `large-v3-turbo` q5_0 (574 MB) |
+| Audio | 600 s (jfk.wav looped — real speech, throughput-valid) |
+| Threads | 10 of 12 |
+| Elapsed | 832.9 s |
+| **Realtime factor** | **0.72×** |
+| Backend | CPU confirmed (`no GPU found` in init log) |
+
+```bash
+cd spikes/03-whisper-vulkan && npm run bench:cpu
+```
+
+**Conclusion.** The ~0.3× published CPU expectation was **pessimistic by 2.4×** on this machine —
+likely turbo's light decoder + q5_0 + 10 Zen 2 threads. Product math:
+
+- 1 h meeting, raw: ~83 min CPU transcription
+- with VAD gating (40–60% silence removed, B-012 pending): **~35–50 min**
+- the 20-min budget (§2.4) still needs Vulkan **or** the `medium` model — but the CPU-only
+  floor is "slow", not "unusable". Risk R-02's downside shrinks accordingly.
+
+**Harness bug found while reading this result (fixed):** `vulkanDetected` grepped `/vulkan/i`
+over the whole log, which matches the build-features banner (`VULKAN = 0`) even in a CPU run.
+Detection now requires an actual Vulkan device-init line. A loose grep here would have let a
+failed Vulkan build masquerade as a Vulkan result — the exact failure mode the check exists for.
+
+**B-008 (Vulkan) remains blocked** on the build toolchain install.
+
+---
+
 ## Pending measurements
 
 To be filled by remaining Phase 0b spikes. **Do not populate from estimates.**
 
 | ID | Measurement | Status | Expectation (to be confirmed or refuted) |
 |---|---|---|---|
-| B-007 | whisper.cpp `large-v3-turbo`, CPU, 10 min audio | ⬜ spike 3 | ~0.3× realtime |
+| B-007 | whisper.cpp `large-v3-turbo`, CPU, 10 min audio | ✅ **measured: 0.72×** | expectation was ~0.3× — **beaten by 2.4×**, see below |
 | B-008 | whisper.cpp `large-v3-turbo`, Vulkan, 10 min audio | ⬜ spike 3 | 3–4× realtime — **but measured on RDNA2; Vega 7 is GCN5, may differ substantially** |
 | B-009 | llama.cpp Qwen3-4B Q4_K_M, CPU: prompt / generation t/s | ⬜ spike 4 | ~34 / ~10 t/s |
 | B-010 | llama.cpp Qwen3-4B Q4_K_M, Vulkan: prompt / generation t/s | ⬜ spike 4 | ~76 / ~10 t/s (generation is bandwidth-bound, offload does not help it) |
