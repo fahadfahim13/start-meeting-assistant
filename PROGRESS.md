@@ -27,8 +27,9 @@ Blocked and deferred rows **must** carry a reason.
 | 0a · Initial commit | ✅ | 31 files |
 | **0b · Spike 1 — Electron loopback audio** | ✅ | **GATE CLEARED.** Electron 44.0.0 captures real system audio. Tone verified at 6219× noise floor, zero dropped frames. See benchmarks B-005 |
 | 0b · Spike 2 — PCM → ffmpeg stdin pipe | ✅ | **PASS, 8/8.** 5 min sustained: 0 ring drops, completeness 1.0000, h264_amf hardware encode, mic↔system drift **3 ms and non-accumulating**. B-006 |
-| 0b · Spike 3 — whisper.cpp Vulkan benchmark | ⬜ | build `-DGGML_VULKAN=1`; Vega 7 is GCN5, **measure, do not assume** |
-| 0b · Spike 4 — llama.cpp Vulkan benchmark | ⬜ | expect ~76 t/s prompt, ~10 t/s generation |
+| 0b · Spike 3 — whisper.cpp CPU baseline (B-007) | 🟡 | harness + official CPU binary ready; model downloading |
+| 0b · Spike 3 — whisper.cpp Vulkan (B-008) | 🔴 | **blocked: needs toolchain install (user must run `scripts/install-build-toolchain.ps1` elevated)** — no official Windows Vulkan binary exists |
+| 0b · Spike 4 — llama.cpp Vulkan benchmark | 🟡 | official Vulkan binary verified: `Vulkan0: AMD Radeon(TM) Graphics (12191 MiB)` — native driver, 12 GB GTT. Model downloading |
 
 **Exit criteria.** Repo committed with all tracking files. All four spikes produce measured
 numbers in `docs/benchmarks.md`. **Spike 1 must prove non-silent system audio.** Any failure is

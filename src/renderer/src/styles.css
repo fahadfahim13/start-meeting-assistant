@@ -1,0 +1,210 @@
+/* MeetFroge — dark-first, WCAG AA contrast. Light theme lands in Phase 9. */
+
+:root {
+  --bg: #0d1117;
+  --panel: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --muted: #9198a1;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --red: #f85149;
+  --amber: #d29922;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+}
+
+body {
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-size: 14px;
+  background: var(--bg);
+  color: var(--text);
+  overflow: hidden;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.titlebar h1 {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.rec-indicator {
+  color: var(--red);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  animation: pulse 2s ease-in-out infinite;
+}
+@keyframes pulse {
+  50% { opacity: 0.55; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rec-indicator { animation: none; }
+}
+
+.layout {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 380px 1fr;
+  gap: 12px;
+  padding: 12px;
+  overflow: auto;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+}
+.panel h2 {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 14px;
+}
+
+.setup label {
+  display: block;
+  margin-bottom: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.setup input[type='text'],
+.setup select {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 7px 10px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 14px;
+}
+.setup select:focus-visible,
+.setup input:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.setup .check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+}
+
+.camera-preview {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  background: #000;
+  border-radius: 6px;
+  margin-bottom: 12px;
+  object-fit: cover;
+}
+
+.meter-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.meter-label {
+  width: 60px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.meter-track {
+  flex: 1;
+  height: 10px;
+  background: var(--bg);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.meter-fill {
+  height: 100%;
+  transition: width 60ms linear;
+}
+
+.messages {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+.messages p { margin: 2px 0; }
+.messages.error {
+  background: rgba(248, 81, 73, 0.12);
+  color: var(--red);
+}
+.messages.warn {
+  background: rgba(210, 153, 34, 0.12);
+  color: var(--amber);
+}
+.estimate {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+.status {
+  display: flex;
+  gap: 14px;
+  color: var(--muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.state { text-transform: uppercase; font-weight: 600; }
+.state-recording { color: var(--red); }
+.state-idle { color: var(--muted); }
+.state-failed { color: var(--red); }
+.drop-warning { color: var(--amber); }
+
+.buttons { display: flex; gap: 10px; }
+
+button {
+  padding: 8px 18px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 14px;
+  cursor: pointer;
+}
+button:disabled { opacity: 0.45; cursor: default; }
+button.ghost:hover:not(:disabled) { border-color: var(--muted); }
+button.record {
+  background: var(--red);
+  border-color: var(--red);
+  color: #fff;
+  font-weight: 600;
+}
+button.stop {
+  background: var(--panel);
+  border-color: var(--red);
+  color: var(--red);
+  font-weight: 600;
+}

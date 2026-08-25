@@ -1,0 +1,46 @@
+{
+  "name": "meetfroge",
+  "version": "0.1.0",
+  "description": "Local-first meeting recorder, transcriber, visual analyzer and summarizer",
+  "license": "GPL-3.0-or-later",
+  "private": true,
+  "author": "Nabil Ahmad Rifat",
+  "homepage": "https://github.com/fahadfahim13/meetfroge",
+  "main": "out/main/index.js",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "npm run typecheck && electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "smoke": "electron-vite build && node scripts/smoke.mjs",
+    "spike:1": "npm start --prefix spikes/01-loopback",
+    "spike:2": "npm start --prefix spikes/02-pcm-pipe",
+    "spike:3": "npm run bench:cpu --prefix spikes/03-whisper-vulkan",
+    "spike:4": "npm run bench --prefix spikes/04-llama-vulkan"
+  },
+  "dependencies": {
+    "zod": "^3.24.0",
+    "zustand": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "44.0.0",
+    "electron-vite": "^3.0.0",
+    "eslint": "^9.17.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.19.0",
+    "vite": "^6.0.0",
+    "vitest": "^2.1.0"
+  }
+}

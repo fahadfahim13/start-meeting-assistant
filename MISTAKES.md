@@ -157,3 +157,44 @@ in `out/result.json`.
 **Rule:** a high-frequency warning that provably costs nothing is still a signal - record it
 with its measured impact instead of silencing it. Do not add a suppression flag before knowing
 which input is responsible, or the real defect gets hidden the day it starts to matter.
+
+---
+
+## M-007 — Camera preview starves ffmpeg: the recording dies with a misleading encoder error
+
+**Date:** 2026-08-25  **Area:** capture/devices  **Cost:** ~40 min of hypothesis testing
+**Symptom:** full-app E2E recording failed with `[vost#0:1/h264_amf] Task finished with error
+code: -22 (Invalid argument)` on the CAMERA stream and "Nothing was written into output file".
+Every isolated reproduction PASSED: camera→AMF solo, dual AMF sessions, dual AMF + real camera
+in one graph, with MKV output. Only the full app failed.
+**Cause:** the renderer's camera preview (getUserMedia) was still holding the camera when
+ffmpeg's dshow input opened it. Cameras are EXCLUSIVE devices. The dshow input delivered zero
+frames, the camera encoder was flushed empty at stop ('q') and died with EINVAL, and the MKV
+muxer — interleaving by dts across all streams — wrote nothing at all because one stream never
+produced a packet. One held device silently poisoned the entire four-stream recording.
+**Fix:** two-part. (1) Preview effects tear down when recording starts. (2) A
+`previewsSuspended` store flag set BEFORE `session:start` is invoked, with a 300 ms yield for
+React effect cleanup — keying teardown on the post-spawn `recording` state releases the device
+too late.
+**Verified:** `MEETFROGE_AUTOREC=30` E2E — before: 0-byte file, exit 1. After: 4 streams,
+28.7 s, hardware encoded, exit 0.
+**Rule:** an exclusive device may have at most ONE owner, and ownership must be handed over
+*before* the next owner opens it, not merely "around the same time". Also: when an encoder
+error appears only in composition and never in isolation, look for a resource the composition
+holds and the isolation does not.
+
+---
+
+## M-008 — Loopback ring pre-roll shifts the system-audio track
+
+**Date:** 2026-08-25  **Area:** capture/sync  **Cost:** caught by the E2E drift check
+**Symptom:** mic↔system end divergence of 407 ms in the app E2E, versus 3 ms in spike 2.
+**Cause:** the renderer starts loopback BEFORE `session:start` so PCM is flowing when ffmpeg
+opens the pipe. Those early frames sat in the ring and were flushed to ffmpeg on connect —
+prepending audio that predates every other input's t=0, shifting the whole system track.
+Spike 2 never saw this because its ffmpeg read the pipe immediately.
+**Fix:** clear the ring at the moment ffmpeg connects. The stream then starts from "now",
+aligned with the other inputs to within one frame (20 ms).
+**Verified:** E2E divergence 407 ms → 56 ms, inside the 100 ms budget.
+**Rule:** a buffer that exists to absorb jitter must not also carry HISTORY across a
+lifecycle boundary. On attach, start clean.
