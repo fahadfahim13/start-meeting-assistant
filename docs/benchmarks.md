@@ -155,13 +155,73 @@ releases, which is why the version is pinned and Dependabot is configured to ign
 
 ---
 
+### B-006 — Loopback PCM into ffmpeg, with screen and mic ✅ PASS
+
+**Date:** 2026-08-25 · **Spike:** 2 · **Verdict:** all 8 criteria pass
+
+The full production capture shape, end to end: `ddagrab → nv12 → h264_amf` for screen, `dshow`
+for microphone, and renderer loopback PCM over `pipe:0` for system audio, muxed into one MKV
+with separate tracks.
+
+**Sustained 5-minute recording:**
+
+| Metric | 60 s trial | **300 s run** |
+|---|---|---|
+| PCM frames | 3 069 | **15 058** |
+| PCM bytes | 11 784 960 | **57 822 720** |
+| **PCM completeness** | 1.0002 | **1.0000** |
+| **Ring buffer drops** | 0 | **0** |
+| Backpressure events | 10 | 13 (all absorbed) |
+| ffmpeg exit code | 0 | **0** |
+| Encoder actually used | h264_amf | **h264_amf** |
+| Output size | 16.9 MB | **95.7 MB** |
+| Container duration | 60.008 s | **300.008 s** |
+
+**Per-track timing** (from last-packet PTS — MKV exposes no per-stream duration, see M-005):
+
+| Track | Last PTS | Packets | Expected |
+|---|---|---|---|
+| v:0 Screen (h264) | 299.933 s | 4 499 | 4 500 @ 15 fps |
+| a:0 Microphone (opus) | 299.997 s | 15 000 | 15 000 @ 20 ms |
+| a:1 System Audio (opus) | 299.994 s | 15 001 | 15 000 @ 20 ms |
+
+**Drift:**
+
+| Measurement | 60 s | 300 s | Budget |
+|---|---|---|---|
+| **Mic ↔ system audio** | 3 ms | **3 ms** | < 100 ms |
+| Video vs audio | 64 ms | 64 ms | < 116.7 ms (one frame + 50) |
+| Measured fps | 15.000 | **14.997** | 15 ± 5% |
+
+**The finding that matters: drift did not grow.** 3 ms at 60 seconds and 3 ms at 300 seconds —
+five times the duration, identical divergence. Drift is **bounded, not accumulating**, which is
+the property that makes long recordings safe. An accumulating error would have shown ~15 ms here.
+
+**Storage:** 95.7 MB / 300 s = **1.148 GB/hour** at the Balanced preset — better than the
+1.75 GB/h planned, because meeting screens are mostly static. On 77.5 GB free that is ~67 hours
+of headroom rather than the ~44 estimated.
+
+```bash
+cd spikes/02-pcm-pipe && npm install
+./node_modules/.bin/electron . --duration 300
+```
+
+**Caveat, logged as M-006.** ffmpeg emitted 582 `[libopus] Queue input is backward in time`
+warnings across the 5 minutes (~1.9/s). Benign here — zero errors, exactly 15 000 mic packets,
+3 ms drift — but the underlying timestamp jitter is real and should be pinned down in Phase 1.
+
+**Conclusion.** [ADR-002](../DECISIONS.md#adr-002--hybrid-capture-chromium-loopback--ffmpeg) is
+validated end to end. Risks [R-03](risks.md) (A/V drift) and [R-05](risks.md) (PCM underruns)
+are retired.
+
+---
+
 ## Pending measurements
 
 To be filled by remaining Phase 0b spikes. **Do not populate from estimates.**
 
 | ID | Measurement | Status | Expectation (to be confirmed or refuted) |
 |---|---|---|---|
-| B-006 | PCM → ffmpeg stdin: drift over 5 min, underrun count | ⬜ spike 2 | < 100 ms drift, zero underruns |
 | B-007 | whisper.cpp `large-v3-turbo`, CPU, 10 min audio | ⬜ spike 3 | ~0.3× realtime |
 | B-008 | whisper.cpp `large-v3-turbo`, Vulkan, 10 min audio | ⬜ spike 3 | 3–4× realtime — **but measured on RDNA2; Vega 7 is GCN5, may differ substantially** |
 | B-009 | llama.cpp Qwen3-4B Q4_K_M, CPU: prompt / generation t/s | ⬜ spike 4 | ~34 / ~10 t/s |

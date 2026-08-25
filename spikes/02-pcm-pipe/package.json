@@ -1,0 +1,15 @@
+{
+  "name": "spike-02-pcm-pipe",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Phase 0b spike 2 - can loopback PCM feed ffmpeg stdin alongside screen and mic capture without drift or underruns?",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "short": "electron . --duration 60",
+    "full": "electron . --duration 300"
+  },
+  "devDependencies": {
+    "electron": "44.0.0"
+  }
+}

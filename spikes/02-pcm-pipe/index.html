@@ -1,0 +1,42 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'unsafe-inline'"
+    />
+    <title>Spike 2 - PCM pipe</title>
+    <style>
+      body {
+        font: 13px/1.5 ui-monospace, "Cascadia Code", Consolas, monospace;
+        background: #0d1117;
+        color: #c9d1d9;
+        margin: 0;
+        padding: 16px;
+      }
+      h1 { font-size: 14px; margin: 0 0 12px; color: #58a6ff; }
+      #status { font-size: 16px; font-weight: 600; margin-bottom: 10px; }
+      #status.ok { color: #3fb950; }
+      #status.fail { color: #f85149; }
+      .meter-wrap {
+        height: 14px; background: #21262d; border-radius: 3px;
+        overflow: hidden; margin-bottom: 12px;
+      }
+      #meter { height: 100%; width: 0%; background: #484f58; transition: width 50ms linear; }
+      #detail { white-space: pre-wrap; color: #8b949e; font-size: 11px; }
+      .hint { color: #6e7681; font-size: 11px; margin-top: 12px; }
+    </style>
+  </head>
+  <body>
+    <h1>Spike 2 — PCM pipe to ffmpeg</h1>
+    <div id="status">starting…</div>
+    <div class="meter-wrap"><div id="meter"></div></div>
+    <div id="detail"></div>
+    <div class="hint">
+      Recording screen + mic + system audio to out/recording.mkv.<br />
+      Window closes on its own; the verdict is printed to the terminal.
+    </div>
+    <script src="renderer.js"></script>
+  </body>
+</html>

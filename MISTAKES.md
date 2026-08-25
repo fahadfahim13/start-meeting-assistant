@@ -108,3 +108,52 @@ check involving Electron must assert on **exit codes and files**, never on captu
 output. This directly affects the loopback smoke test in `.github/workflows/ci.yml` — it asserts
 via `--assert-non-silent` setting the exit code, which is correct; a log-grep assertion there
 would have passed vacuously forever.
+
+---
+
+## M-005 — MKV exposes no per-stream duration, so naive drift measurement reports nothing
+
+**Date:** 2026-08-25  **Area:** capture/verification  **Cost:** ~15 min, and produced a
+**false FAIL** on an otherwise perfect recording
+**Symptom:** spike 2 produced a flawless 60 s recording — 3 correct tracks, hardware encoded,
+zero dropped PCM frames — and then reported `driftUnder100ms: false`.
+**Cause:** `ffprobe -show_streams` returns `duration: null` for every stream in a Matroska file.
+Matroska stores duration once at the container level, not per track. The drift calculation
+therefore compared `null` values, `null < 100` evaluated false, and the verdict failed.
+**Fix:** measure each track's end from the presentation timestamp of its **last packet**:
+```bash
+ffprobe -v error -select_streams a:0 -show_entries packet=pts_time -of csv=p=0 file.mkv | tail -1
+```
+Also account for the video track legitimately ending up to one frame interval earlier than
+audio — at 15 fps that is 66.7 ms, which would otherwise look like drift.
+**Verified:** on the same 60 s file — v:0 last PTS 59.933 (899 packets = exactly 15.000 fps),
+a:0 59.997 (2999 packets), a:1 59.994 (3001 packets). Real mic↔system drift: **3 ms**.
+**Rule:** never measure container-level properties per stream without checking that the
+container actually stores them. And when a verification step fails on output that looks correct,
+**suspect the measurement before suspecting the system** — a false FAIL that gets "fixed" by
+loosening the threshold hides the real signal forever.
+
+---
+
+## M-006 — libopus warns "Queue input is backward in time" on dshow mic capture
+
+**Date:** 2026-08-25  **Area:** capture/audio  **Cost:** none yet, but unresolved
+**Symptom:** during a 5-minute recording, ffmpeg emitted **582** occurrences of
+`[libopus @ ...] Queue input is backward in time` (~1.9 per second). Only one encoder
+instance address appears in the log, so it is one stream, not both.
+**Cause:** almost certainly the DirectShow microphone input. DirectShow device timestamps
+jitter and can step backward; libopus notices and re-orders. The `pipe:0` input cannot be the
+source - raw s16le carries no timestamps at all, so ffmpeg synthesises them from the byte count
+at the declared 48 kHz, which is monotonic by construction.
+**Impact measured, not assumed:** none observable. Zero ffmpeg errors, exactly 15 000 mic
+packets for 300 s of 20 ms Opus frames, and 3 ms mic-to-system drift that did not grow between
+the 60 s and 300 s runs.
+**Fix:** not applied yet. Candidates for Phase 1, to be tested rather than guessed:
+- `-use_wallclock_as_timestamps 1` on the dshow input
+- `-af aresample=async=1` to absorb jitter by resampling
+- `-fflags +genpts`
+**Verified:** `grep -c "backward in time" out/ffmpeg.log` -> 582, alongside a clean verdict
+in `out/result.json`.
+**Rule:** a high-frequency warning that provably costs nothing is still a signal - record it
+with its measured impact instead of silencing it. Do not add a suppression flag before knowing
+which input is responsible, or the real defect gets hidden the day it starts to matter.

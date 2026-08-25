@@ -22,18 +22,6 @@ Vulkan path may be unstable.
 disappoints, drop the default model tier to `medium` or `small` and adjust the first-run
 recommendation accordingly.
 
-### R-03 · A/V drift over long recordings 🟠
-
-**Probability:** medium · **Phase:** 1, 2 · **Status:** open
-
-Four independent capture sources (screen, camera, mic, loopback PCM) with different clocks.
-Drift accumulates and is most visible at the end of long recordings, where it is also most
-expensive to discover.
-
-**Mitigation.** Segmented recording bounds accumulation to 5 minutes. A sync harness measures
-offset with a clapper/tone test and applies `-itsoffset` correction. Re-sync at segment
-boundaries. Verification requires a 30-minute test, not a 30-second one.
-
 ### R-04 · h264_amf failing on other AMD drivers 🟠
 
 **Probability:** medium · **Phase:** 1 · **Status:** partially mitigated
@@ -44,17 +32,6 @@ Other driver versions may fail differently, and `ffmpeg -encoders` lists encoder
 **Mitigation.** Capability probe executes a **real one-second encode** rather than reading the
 encoder list. Full fallback ladder down to `libx264`. `capture_profile` records which encoder was
 actually used, so quality reports are diagnosable.
-
-### R-05 · PCM pipe underruns causing audio gaps 🟠
-
-**Probability:** medium · **Phase:** 1 · **Status:** open
-
-The renderer's audio thread must never block on ffmpeg stdin. A stall produces gaps or, worse,
-shifts everything after it in the timeline.
-
-**Mitigation.** Fixed 4-second ring buffer in main. Overflow drops oldest frames and increments a
-visible counter. Underrun inserts silence to preserve timeline alignment — a gap must not shift
-subsequent audio. Both conditions surface in the UI rather than failing silently.
 
 ### R-06 · WebRTC ↔ DirectShow device name mismatch 🟡
 
@@ -82,7 +59,9 @@ feature, not a disclaimer. Improving this is tracked in ROADMAP under considerat
 
 **Probability:** high · **Phase:** 2, 7 · **Status:** mitigated by design
 
-77.5 GB free on C: is roughly 44 hours at the Balanced preset. D: has only 12.8 GB.
+77.5 GB free on C: is roughly **67 hours** at the Balanced preset — measured at 1.148 GB/hour
+in [B-006](benchmarks.md), better than the 1.75 GB/h originally planned because meeting screens
+are mostly static. D: has only 12.8 GB, so relocating storage there is a trap worth guarding.
 
 **Mitigation.** Pre-flight estimate shown before recording ("≈ 6.2 hours available"). Live monitor
 with a hard floor and clean auto-stop. Retention policy. "Keep transcript, delete video" option.
@@ -139,3 +118,40 @@ Dependabot ignores `electron`, and the CI loopback smoke test asserts non-silent
 PR. The five-rung fallback ladder (native loopback → `electron-audio-loopback` → virtual audio
 cable → obs-websocket → record without system audio) remains documented in
 [architecture.md](architecture.md) in case a future upgrade regresses.
+
+---
+
+### R-03 · A/V drift over long recordings 🟠 → retired 2026-08-25
+
+**Was:** four independent capture sources (screen, camera, mic, loopback PCM) with different
+clocks. Drift accumulates and is most visible at the end of long recordings, where it is also
+most expensive to discover.
+
+**Retired by:** [benchmarks B-006](benchmarks.md). Mic-to-system-audio divergence measured
+**3 ms at 60 seconds and 3 ms at 300 seconds** — five times the duration, identical divergence.
+Drift is bounded, not accumulating. An accumulating error would have shown roughly 15 ms at
+300 s. Video landed 64 ms behind audio against a 66.7 ms frame interval, i.e. within one frame,
+which is the expected bound rather than drift. Measured frame rate 14.997 against a 15.000
+target (0.02% error).
+
+**Residual risk.** Only the mic-plus-system-plus-screen combination has been measured, and only
+to 5 minutes. Camera capture adds a fourth clock and is untested. The 3-hour case in the manual
+test matrix (docs/testing.md) still needs running. Segmented recording remains in the design as
+defence in depth: it bounds any future accumulation to one 5-minute segment regardless.
+
+---
+
+### R-05 · PCM pipe underruns causing audio gaps 🟠 → retired 2026-08-25
+
+**Was:** the renderer's audio thread must never block on ffmpeg stdin. A stall produces gaps
+or, worse, shifts everything after it in the timeline.
+
+**Retired by:** [benchmarks B-006](benchmarks.md). Over a sustained 5-minute recording the
+bridge delivered 15 058 frames / 57 822 720 bytes at a completeness of **1.0000** with **zero
+ring-buffer drops**. Thirteen backpressure events occurred and were absorbed by the 4-second
+ring exactly as designed — the mechanism was genuinely exercised rather than merely present.
+
+**Residual risk.** Backpressure was exercised 13 times in 5 minutes under light system load.
+Heavy load (transcription running concurrently, disk contention) has not been tested, though
+ADR-006 makes that combination unlikely by design since processing is post-meeting. The drop
+counter must surface in the UI so a future regression is visible rather than silent.

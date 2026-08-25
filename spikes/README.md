@@ -9,7 +9,7 @@ Every result goes in `docs/benchmarks.md`. Every non-obvious failure goes in `MI
 | # | Spike | Question it answers | Status |
 |---|---|---|---|
 | 1 | `01-loopback/` | Can Electron 44 capture non-silent system audio on this machine? | ✅ **PASS** — B-005 |
-| 2 | `02-pcm-pipe/` | Can that PCM feed ffmpeg stdin for 5 min without drift or underruns? | not started |
+| 2 | `02-pcm-pipe/` | Can that PCM feed ffmpeg stdin for 5 min without drift or underruns? | ✅ **PASS 8/8** — B-006 |
 | 3 | `03-whisper-vulkan/` | How fast is whisper.cpp on a Vega 7 iGPU vs CPU? | not started |
 | 4 | `04-llama-vulkan/` | How fast is Qwen3-4B on a Vega 7 iGPU vs CPU? | not started |
 
