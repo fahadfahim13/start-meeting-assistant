@@ -41,15 +41,17 @@ logged in `MISTAKES.md` before proceeding.
 
 | Task | Status | Notes |
 |---|---|---|
-| Electron scaffold + hardening + fuses | ⬜ | |
-| Typed IPC gateway, zod both directions | ⬜ | |
-| Device enumeration + WebRTC↔DirectShow name reconciliation | ⬜ | known sharp edge |
-| `CaptureBackend` interface + `WindowsCaptureBackend` | ⬜ | portability seam |
-| Capability probe via **real 1 s encodes** | ⬜ | never read `-encoders` (M-001) |
-| ffmpeg argv builder + encoder ladder | ⬜ | verified nv12 recipe |
-| Loopback PCM bridge (ring buffer, backpressure) | ⬜ | |
-| Live preview + dual level meters + pre-flight checklist | ⬜ | |
-| A/V sync harness + `-itsoffset` correction | ⬜ | |
+| Electron scaffold + hardening | ✅ | electron-vite + React + TS strict; CSP, nav lockdown, permission handler. Fuses land at package time (Phase 10) |
+| Typed IPC gateway, zod both directions | ✅ | caught a real bug on first boot (0×0 thumbnails) |
+| Device enumeration + WebRTC↔DirectShow name reconciliation | ✅ | pure `reconcile.ts`, unit-tested |
+| `CaptureBackend` interface + `WindowsCaptureBackend` | ⏸ | deferred: modules are cleanly separated but the formal interface extraction waits for a second platform (pre-Linux port refactor) |
+| Capability probe via **real 1 s encodes** | ✅ | finds h264_amf + libx264 on REF-01 in 5.6 s; cache keyed to ffmpeg version |
+| ffmpeg argv builder + encoder ladder | ✅ | per-encoder format chains, 12 unit tests |
+| Loopback PCM bridge (ring buffer, backpressure) | ✅ | named pipe (stdin freed for 'q' graceful stop); pre-roll cleared on connect (M-008) |
+| Live preview + dual level meters + pre-flight checklist | ✅ | previews release devices before recording (M-007) |
+| **E2E: unattended 4-stream recording through the app** | ✅ | `MEETFROGE_AUTOREC` — 28.7 s, 2v+2a, h264_amf, mic↔system 56 ms |
+| A/V sync harness (`scripts/sync-test.mjs`) | 🟡 | written; run pending an idle CPU (whisper bench running) |
+| `-itsoffset` correction | ⬜ | only if the sync harness shows a stable offset worth correcting |
 
 ## Phase 2 — Recording controls and storage (2.5 d)
 
