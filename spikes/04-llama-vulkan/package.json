@@ -1,0 +1,10 @@
+{
+  "name": "spike-04-llama-vulkan",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Phase 0b spike 4 - llama.cpp CPU vs Vulkan on a Vega 7 iGPU",
+  "type": "module",
+  "scripts": {
+    "bench": "node bench.mjs"
+  }
+}

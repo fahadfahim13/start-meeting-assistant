@@ -39,6 +39,13 @@ test-results/
 spikes/**/out/
 spikes/**/*.pcm
 
+# spike binaries and models are FETCHED, never committed.
+# The fetch commands live in each spike's README so the setup stays reproducible
+# without putting hundreds of MB of third-party binaries in git history.
+spikes/**/bin/
+spikes/**/models/
+*.zip
+
 # env
 .env
 .env.local
