@@ -50,8 +50,9 @@ logged in `MISTAKES.md` before proceeding.
 | Loopback PCM bridge (ring buffer, backpressure) | ✅ | named pipe (stdin freed for 'q' graceful stop); pre-roll cleared on connect (M-008) |
 | Live preview + dual level meters + pre-flight checklist | ✅ | previews release devices before recording (M-007) |
 | **E2E: unattended 4-stream recording through the app** | ✅ | `MEETFROGE_AUTOREC` — 28.7 s, 2v+2a, h264_amf, mic↔system 56 ms |
-| A/V sync harness (`scripts/sync-test.mjs`) | 🟡 | written; run pending an idle CPU (whisper bench running) |
-| `-itsoffset` correction | ⬜ | only if the sync harness shows a stable offset worth correcting |
+| A/V sync harness (`scripts/sync-test.mjs`) | ✅ | v2 (burst anchored to file creation, per-track localization, degenerate-peak guard). Measured: mic lags system 116–232 ms, direction stable |
+| `-itsoffset` correction | ⏸ | deferred to Phase 2 as **R-11**: offset is systematic ~120 ms but wallclock unification broke recording (M-010); ordered fix candidates documented |
+| Lint + typecheck + 12 unit tests green | ✅ | |
 
 ## Phase 2 — Recording controls and storage (2.5 d)
 

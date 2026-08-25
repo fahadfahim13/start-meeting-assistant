@@ -126,21 +126,29 @@ npm run spike:4        # llama.cpp Vulkan benchmark
 
 ## Current state
 
-**Phase 0a complete. Phase 0b in progress — spike 1 PASSED, the hard gate is cleared.**
+**Phase 1 capture engine substantially complete.** The app records screen + camera + mic +
+system audio into one MKV through the full production path, verified by unattended E2E.
 See `PROGRESS.md`.
 
-Electron 44.0.0 captures real system audio via WASAPI loopback: 48 kHz stereo, zero dropped
-frames, test tone verified at 6219x the noise floor (benchmarks B-005). ADR-002 stands.
+- Spikes 1, 2 PASSED (B-005, B-006). Spike 3 CPU baseline measured: **0.72x realtime**
+  (B-007). Spike 3 Vulkan (B-008) blocked on the user running
+  `scripts/install-build-toolchain.ps1` elevated. Spike 4 pending model re-download (M-009).
+- Test harnesses: `npm run smoke` (boot+probe), `MEETFROGE_AUTOREC=N` (unattended recording
+  E2E), `scripts/sync-test.mjs` (mic-vs-system alignment).
+- Known open issue **R-11**: mic lags system audio ~120 ms systematically. Do NOT try
+  `-use_wallclock_as_timestamps` — it breaks the recording (M-010).
 
-Spikes 2-4 remain. Do not start Phase 1 until they have produced measurements.
+### Things that will bite you (all learned the hard way — details in MISTAKES.md)
 
-### Two things that will bite you
-
-- **Electron produces no stdout on Windows** (MISTAKES.md M-004). It is a GUI-subsystem binary.
-  Assert on **exit codes and files**, never on captured console output. Use
-  `electron . --enable-logging` for interactive debugging.
-- **`h264_amf` needs an explicit nv12 conversion** (MISTAKES.md M-001). The recipe above is not
-  optional styling.
+- **Electron produces no stdout on Windows** (M-004). Assert on exit codes and files.
+  `--enable-logging` for interactive debugging.
+- **`h264_amf` needs an explicit nv12 conversion** (M-001) — on EVERY chain, camera included
+  (M-007 sibling). Probe encoders with real encodes.
+- **Exclusive devices** (M-007): the renderer preview must release the camera BEFORE
+  session:start. `previewsSuspended` in the store handles this — keep it.
+- **Ring pre-roll** (M-008): the loopback ring clears on ffmpeg connect. Removing that
+  reintroduces a ~400 ms system-track shift.
+- **Downloads** (M-009): verify byte count/hash; never trust an exit code read through a pipe.
 
 ## Per-phase discipline
 
