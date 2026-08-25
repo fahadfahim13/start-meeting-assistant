@@ -36,7 +36,6 @@ export default function App(): React.JSX.Element {
 
   useEffect(() => {
     void s.refreshDevices()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // E2E harness (?autorec=N): record unattended through the full production
@@ -55,7 +54,6 @@ export default function App(): React.JSX.Element {
       clearTimeout(t1)
       if (!stopped) clearTimeout(t2)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [s.inventory === null])
 
   const recording = s.session?.state === 'recording'
