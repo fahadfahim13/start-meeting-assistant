@@ -67,6 +67,9 @@ export const CaptureConfigSchema = z.object({
       displayIndex: z.number().int().min(0).max(15).nullable(),
       /** gdigrab needs the window title; screens do not use it. */
       windowTitle: z.string().max(512).nullable(),
+      /** Human-readable source name — recorded into capture_profile so the
+       *  summary can say what it came from. */
+      label: z.string().max(256).nullable(),
     })
     .nullable(),
   camera: z.object({ dshowName: deviceString }).nullable(),

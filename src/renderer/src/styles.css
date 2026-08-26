@@ -397,3 +397,25 @@ button.seg-time:hover { color: var(--accent); }
   clip: rect(0 0 0 0); white-space: nowrap;
 }
 .req-tag { font-size: 10px; color: var(--red); text-transform: uppercase; letter-spacing: 0.05em; }
+
+/* ─── Screen preview + picker strip ─────────────────────────── */
+.screen-preview {
+  width: 100%; border-radius: 6px; border: 2px solid var(--accent);
+  margin-bottom: 6px; display: block;
+}
+.preview-note { font-size: 12px; color: var(--accent); margin-bottom: 10px; }
+.warn-note { color: var(--amber); }
+.screen-strip {
+  display: flex; gap: 6px; overflow-x: auto; margin-top: 6px; padding-bottom: 4px;
+}
+.screen-thumb {
+  flex: 0 0 auto; width: 96px; padding: 3px; background: var(--bg);
+  border: 2px solid var(--border); border-radius: 5px; cursor: pointer;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.screen-thumb img { width: 100%; border-radius: 3px; display: block; }
+.screen-thumb span { font-size: 10px; color: var(--muted); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.screen-thumb.selected { border-color: var(--accent); }
+.screen-thumb.selected span { color: var(--accent); }
+.screen-thumb:hover:not(:disabled) { border-color: var(--muted); }
+.source-note { font-size: 12px; color: var(--muted); margin-bottom: 8px; }

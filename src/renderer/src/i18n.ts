@@ -38,6 +38,8 @@ export const en = {
   },
   preview: {
     heading: 'Preview',
+    screenLabel: 'This screen/window will be recorded — the transcript, visual analysis and summary all come from it.',
+    noScreen: 'No screen selected — only the camera/audio will be recorded.',
     mic: 'Mic',
     system: 'System',
     estimate: (perHour: string, free: string) => `≈ ${perHour}/hour · ${free} free`,
@@ -52,6 +54,7 @@ export const en = {
   },
   library: {
     meetings: 'Meetings',
+    sourcePrefix: 'Source: ',
     searchAll: 'Search all meetings (speech + on-screen text)',
     searchAllAria: 'Search all meetings, speech and on-screen text',
     searchTranscript: 'Search this transcript…',

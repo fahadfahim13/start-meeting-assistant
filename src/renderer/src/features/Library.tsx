@@ -9,6 +9,7 @@ interface MeetingItem {
   durationMs: number | null
   state: string
   bytes: number | null
+  sourceLabel: string | null
   tags: string[]
   jobs: { stage: string; state: string; progress: number }[]
 }
@@ -394,6 +395,12 @@ export default function Library(): React.JSX.Element {
             {!summary && <p className="empty">{t.library.noSummary}</p>}
             {summary && (
               <>
+                {(() => {
+                  const m = items.find((x) => x.id === selected)
+                  return m?.sourceLabel ? (
+                    <p className="source-note">{t.library.sourcePrefix}{m.sourceLabel}</p>
+                  ) : null
+                })()}
                 {summary.degraded && (
                   <p className="messages warn">{t.library.degradedSummary}</p>
                 )}

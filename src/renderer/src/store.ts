@@ -53,6 +53,10 @@ function buildConfig(state: AppState): CaptureConfig {
           kind: screen.kind,
           displayIndex: screen.displayIndex,
           windowTitle: screen.kind === 'window' ? screen.name : null,
+          label:
+            screen.kind === 'window'
+              ? screen.name.slice(0, 256)
+              : `Screen ${(screen.displayIndex ?? 0) + 1}`,
         }
       : null,
     camera: camera?.dshowName ? { dshowName: camera.dshowName } : null,

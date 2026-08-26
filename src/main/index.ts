@@ -70,6 +70,19 @@ function bootstrap(): void {
   // ---- IPC (allowlisted + validated by the gateway) ------------------------
   handle('devices:enumerate', (payload) => enumerateDevices(payload))
   handle('devices:probeCapabilities', ({ force }) => probeCapabilities(force))
+
+  handle('devices:screenPreview', async ({ sourceId }) => {
+    const { desktopCapturer } = await import('electron')
+    const sources = await desktopCapturer.getSources({
+      types: ['screen', 'window'],
+      thumbnailSize: { width: 640, height: 360 },
+      fetchWindowIcons: false,
+    })
+    const src = sources.find((x) => x.id === sourceId)
+    return {
+      thumbnailDataUrl: src && !src.thumbnail.isEmpty() ? src.thumbnail.toDataURL() : null,
+    }
+  })
   handle('session:validate', (config) => sessions.validate(config))
   handle('session:start', async (config) => ({ meetingId: await sessions.start(config) }))
   handle('session:pause', () => sessions.pause())
@@ -89,6 +102,13 @@ function bootstrap(): void {
         durationMs: m.duration_ms,
         state: m.state,
         bytes: m.media_bytes,
+        sourceLabel: (() => {
+          try {
+            return (JSON.parse(m.capture_profile) as { sourceLabel?: string }).sourceLabel ?? null
+          } catch {
+            return null
+          }
+        })(),
         tags: (
           getDb()
             .prepare('SELECT t.name FROM meeting_tags mt JOIN tags t ON t.id = mt.tag_id WHERE mt.meeting_id = ?')

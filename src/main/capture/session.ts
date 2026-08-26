@@ -134,7 +134,19 @@ export class SessionManager {
       id: meetingId,
       title: config.title,
       mediaPath: path.join('recordings', baseName), // relative; becomes the file on finalize
-      captureProfile: { preset: config.preset, encoder, segmentTimeS: SEGMENT_TIME_S },
+      captureProfile: {
+        preset: config.preset,
+        encoder,
+        segmentTimeS: SEGMENT_TIME_S,
+        // Provenance: the summary names the source it was built from.
+        sourceLabel: config.screen
+          ? config.screen.kind === 'window'
+            ? config.screen.windowTitle ?? config.screen.label
+            : (config.screen.label ?? `Screen ${(config.screen.displayIndex ?? 0) + 1}`)
+          : config.camera
+            ? 'Camera only'
+            : 'Audio only',
+      },
       hasScreen: config.screen !== null,
       hasCamera: config.camera !== null,
       hasMic: config.microphone !== null,

@@ -24,6 +24,10 @@ export const INVOKE_CHANNELS = {
     }),
     response: DeviceInventorySchema,
   },
+  'devices:screenPreview': {
+    request: z.object({ sourceId: z.string().min(1).max(256) }),
+    response: z.object({ thumbnailDataUrl: z.string().max(4_000_000).nullable() }),
+  },
   'devices:probeCapabilities': {
     request: z.object({ force: z.boolean() }),
     response: CapabilitiesSchema,
@@ -63,6 +67,7 @@ export const INVOKE_CHANNELS = {
           durationMs: z.number().nullable(),
           state: z.string(),
           bytes: z.number().nullable(),
+          sourceLabel: z.string().nullable(),
           tags: z.array(z.string()),
           jobs: z.array(z.object({ stage: z.string(), state: z.string(), progress: z.number() })),
         }),

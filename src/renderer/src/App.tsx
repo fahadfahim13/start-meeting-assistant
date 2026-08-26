@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from './store'
+import { api } from './api'
 import { startMeter, type MeterHandle } from './audio/meter'
 import Library from './features/Library'
 import Settings from './features/Settings'
@@ -63,6 +64,29 @@ export default function App(): React.JSX.Element {
   const recording = s.session?.state === 'recording'
   const paused = s.session?.state === 'paused'
   const inSession = recording || paused || s.session?.state === 'finalizing'
+  const [screenShot, setScreenShot] = useState<string | null>(null)
+
+  // Live preview of the SELECTED screen/window — so what gets recorded (and
+  // therefore what the summary is built from) is visible before pressing
+  // Record, not discovered afterwards. Refreshes every 2 s while idle.
+  useEffect(() => {
+    const id = s.selection.screenId
+    if (!id || inSession) {
+      setScreenShot(null)
+      return
+    }
+    let alive = true
+    const grab = async (): Promise<void> => {
+      const r = await api.invoke('devices:screenPreview', { sourceId: id })
+      if (alive && r.ok) setScreenShot(r.data.thumbnailDataUrl)
+    }
+    void grab()
+    const timer = setInterval(() => void grab(), 2000)
+    return () => {
+      alive = false
+      clearInterval(timer)
+    }
+  }, [s.selection.screenId, inSession])
 
   // Camera preview — WebRTC, entirely separate from the ffmpeg path, and torn
   // down the moment recording starts: cameras are EXCLUSIVE devices, and a
@@ -174,6 +198,23 @@ export default function App(): React.JSX.Element {
                 </option>
               ))}
             </select>
+            <div className="screen-strip" role="listbox" aria-label="Pick a screen or window">
+              {inv?.screens.filter((sc) => sc.thumbnailDataUrl).slice(0, 12).map((sc) => (
+                <button
+                  key={sc.id}
+                  type="button"
+                  role="option"
+                  aria-selected={s.selection.screenId === sc.id}
+                  className={`screen-thumb ${s.selection.screenId === sc.id ? 'selected' : ''}`}
+                  title={sc.kind === 'screen' ? t.setup.screenOption((sc.displayIndex ?? 0) + 1) : sc.name}
+                  disabled={inSession}
+                  onClick={() => s.select({ screenId: sc.id })}
+                >
+                  <img src={sc.thumbnailDataUrl ?? undefined} alt="" />
+                  <span>{sc.kind === 'screen' ? t.setup.screenOption((sc.displayIndex ?? 0) + 1) : sc.name.slice(0, 22)}</span>
+                </button>
+              ))}
+            </div>
           </label>
 
           <label>
@@ -242,6 +283,14 @@ export default function App(): React.JSX.Element {
 
         <section className="panel preview" aria-label="Preview">
           <h2>{t.preview.heading}</h2>
+          {screenShot ? (
+            <>
+              <img src={screenShot} alt="Selected screen preview" className="screen-preview" />
+              <p className="preview-note">{t.preview.screenLabel}</p>
+            </>
+          ) : (
+            !inSession && s.selection.screenId === null && <p className="preview-note warn-note">{t.preview.noScreen}</p>
+          )}
           <video ref={videoRef} autoPlay muted playsInline className="camera-preview" />
           <Meter level={micLevel} label={t.preview.mic} />
           <Meter level={s.systemLevel} label={t.preview.system} />
