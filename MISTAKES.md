@@ -357,3 +357,26 @@ tightened to require >= 60% of the requested duration — the original bug PASSE
 **Rule:** when output is truncated, check WHEN the producer started before theorizing about
 why it stalled. And an E2E that asserts "some output exists" will bless a recording that
 missed 90% of the meeting — assert against the REQUESTED quantity.
+
+---
+
+## M-017 — Hand-whitelisting node_modules broke the packaged app with an invisible Error dialog
+
+**Date:** 2026-08-26  **Area:** packaging  **Cost:** ~1.5 h of bisecting through wrong theories
+**Symptom:** the packaged app "hung": no logs, no smoke output, no crash, process alive
+forever. Dev build worked perfectly. Fuse theories (asar integrity, then all fuses) were
+bisected and disproven. The give-away came from process inspection: a SINGLE process (no
+GPU/renderer children) whose main window title was "Error" — Electron's native module-load
+failure dialog, modal, waiting for a click nobody could give.
+**Cause:** the electron-builder `files` list used `!node_modules/**` plus a hand-picked
+whitelist of six packages. Their TRANSITIVE dependencies (tesseract.js alone pulls ~10) were
+excluded, so the packaged main died at require(). Also stacked on M-017a: the smoke harness
+originally wrote into `app.getAppPath()/out` — read-only inside asar.
+**Fix:** delete the hand-curation; electron-builder computes the production dependency
+closure itself. Harness output moved to userData when packaged.
+**Verified:** packaged win-unpacked smoke: exit 0, h264_amf probed, 10 screens enumerated.
+**Rule:** never hand-curate a dependency closure a tool already computes — you will maintain
+it wrong exactly once. And for a GUI-subsystem app, "hangs silently" often means "a modal
+dialog is showing where no one can see it": check the WINDOW TITLE and child-process tree
+before theorizing. Dev-vs-packaged behavioral differences come from the package, not the code
+— bisect the package inputs.

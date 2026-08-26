@@ -1,10 +1,18 @@
 {
-  "generated": "2026-08-26T12:05:27.356Z",
+  "generated": "2026-08-26T12:29:25.608Z",
   "note": "SHA-256 of bundled binaries. Regenerate with scripts/gen-binaries-manifest.mjs after any binary change.",
   "files": {
     "SDL2.dll": {
       "sha256": "de23db1694a3c7a4a735e7ecd3d214b2023cc2267922c6c35d30c7fc7370d677",
       "bytes": 2500096
+    },
+    "ffmpeg.exe": {
+      "sha256": "09948d4cdd0650da6ff5a87577469f2a218dc2615ae379f8f734d24c49de0f73",
+      "bytes": 227398656
+    },
+    "ffprobe.exe": {
+      "sha256": "a6618e99bb58869ded3c6f37b53aa1a8d701c3591dbb7b5b317d47369c112be2",
+      "bytes": 227193344
     },
     "ggml-base.dll": {
       "sha256": "b6976c88d09326c6b065bc0dd172d8895f0469a1b7ae058ce2c803ca541796c4",

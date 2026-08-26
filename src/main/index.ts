@@ -20,6 +20,11 @@ import { MODEL_IDS, modelStatus, modelsDir, type ModelId } from './platform/mode
 import { MODEL_REGISTRY } from './platform/model-registry'
 import { cancelDownload, downloadModel } from './platform/model-downloader'
 
+/** Harness output dir: asar is read-only, so packaged runs write to userData (M-017). */
+function harnessOutDir(): string {
+  return app.isPackaged ? path.join(app.getPath('userData'), 'out') : path.join(app.getAppPath(), 'out')
+}
+
 // A second launch focuses the existing window instead of racing on state.
 if (!app.requestSingleInstanceLock()) {
   app.quit()
@@ -495,7 +500,7 @@ function bootstrap(): void {
           : false),
     }
 
-    const outDir = path.join(app.getAppPath(), 'out')
+    const outDir = harnessOutDir()
     mkdirSync(outDir, { recursive: true })
     writeFileSync(path.join(outDir, 'e2e.json'), JSON.stringify(result, null, 2))
     app.exit(result.ok ? 0 : 1)
@@ -558,14 +563,15 @@ function bootstrap(): void {
       })),
       ok: jobs.every((j) => j.state === 'done' || j.state === 'skipped') && segments.length >= 0,
     }
-    const outDir = path.join(app.getAppPath(), 'out')
+    const outDir = harnessOutDir()
     mkdirSync(outDir, { recursive: true })
     writeFileSync(path.join(outDir, 'transcribe-e2e.json'), JSON.stringify(result, null, 2))
     app.exit(result.ok ? 0 : 1)
   }
 
   async function runSmoke(): Promise<void> {
-    const outDir = path.join(app.getAppPath(), 'out')
+    log.info('smoke', 'start')
+    const outDir = harnessOutDir()
     const result: Record<string, unknown> = {
       smoke: true,
       date: new Date().toISOString(),
@@ -573,8 +579,10 @@ function bootstrap(): void {
     }
     try {
       const caps = await probeCapabilities()
+      log.info('smoke', 'probed')
       result['capabilities'] = caps
       const devices = await enumerateDevices({ webrtcCameras: [], webrtcMicrophones: [] })
+      log.info('smoke', 'devices ok')
       result['screens'] = devices.screens.map((s) => ({ id: s.id, kind: s.kind, name: s.name.slice(0, 40) }))
       result['recovery'] = recoveryReports
       result['ok'] = caps.workingEncoders.length > 0
@@ -582,8 +590,10 @@ function bootstrap(): void {
       result['ok'] = false
       result['error'] = String(e)
     }
+    log.info('smoke', 'writing result')
     mkdirSync(outDir, { recursive: true })
     writeFileSync(path.join(outDir, 'smoke.json'), JSON.stringify(result, null, 2))
+    log.info('smoke', 'done - exiting')
     app.exit(result['ok'] ? 0 : 1)
   }
 }

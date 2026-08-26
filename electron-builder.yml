@@ -1,0 +1,52 @@
+appId: dev.meetfroge.app
+productName: MeetFroge
+copyright: "Copyright © 2026 Nabil Ahmad Rifat — GPL-3.0-or-later"
+
+directories:
+  output: release
+  buildResources: resources
+
+# electron-builder computes the production node_modules closure itself.
+# Hand-whitelisting packages missed their transitive deps and produced a
+# packaged app whose main failed at require() with a native Error dialog -
+# a silent hang from the outside (M-017).
+files:
+  - out/**
+  - package.json
+
+# Native addons and their DLLs cannot load from inside asar (M-012 family).
+asar: true
+asarUnpack:
+  - node_modules/sherpa-onnx-node/**
+  - node_modules/sherpa-onnx-win-x64/**
+  - node_modules/tesseract.js-core/**
+
+extraResources:
+  # Bundled binaries + their integrity manifest (verified at boot, T7).
+  - from: resources/bin
+    to: bin
+  - from: resources/bin.manifest.json
+    to: bin.manifest.json
+  - from: resources/icons
+    to: icons
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: resources/icons/app.ico
+  # Unsigned for v1.0 (docs/risks.md open item): SmartScreen will warn.
+  # Release checksums are the verification story.
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  license: LICENSE
+  deleteAppDataOnUninstall: false
+  shortcutName: MeetFroge
+
+# Electron fuses are flipped post-pack (see scripts/after-pack.cjs).
+afterPack: scripts/after-pack.cjs
+
+publish: null

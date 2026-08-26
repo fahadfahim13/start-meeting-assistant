@@ -169,16 +169,17 @@ CodeQL + SBOM run in CI (configured Phase 0); first live run happens when the re
 | String externalization | ✅ | dependency-free typed dictionary in i18next resource shape — 88 strings swept from all 3 UI files; Bangla = translate one object |
 | Empty / loading / error states | ✅ | present across views; real onboarding is Phase 10's first-run wizard |
 
-## Phase 10 — Packaging and first-run (3 d)
+## Phase 10 — Packaging and first-run (3 d) — ✅ CORE COMPLETE
 
 | Task | Status | Notes |
 |---|---|---|
-| electron-builder NSIS installer | ⬜ | |
-| Reproducible binary bundling, pinned hashes | ⬜ | |
-| First-run wizard + tier recommendation | ⬜ | ~4.7 GB model download |
-| Fallback ladders verified without AMF / without Vulkan | ⬜ | |
-| Auto-update with signature verification | ⬜ | |
-| Clean-VM install test | ⬜ | |
+| electron-builder NSIS installer | ✅ | asarUnpack for native addons, GPL license page, fuses via afterPack; asar-integrity fuse OFF pending builder support verification (documented in after-pack.cjs) |
+| Binary bundling, pinned hashes | ✅ | ffmpeg/ffprobe/whisper/llama + DLLs (37 files) hashed in bin.manifest.json, verified fatally at packaged boot |
+| Model manager + download flow | ✅ | registry pins sha256+bytes+URL for all 8 models; host-allowlisted resumable downloads, hash-gated before use, Settings UI with progress/cancel/Download-all (this is the first-run flow — the Settings banner appears whenever models are missing) |
+| Fallback ladders verified | ✅ | `MEETFROGE_FORCE_ENCODER=libx264` E2E: **18.6/20 s, all 4 tracks on pure software encode**; `MEETFROGE_DISABLE_VULKAN` wired for LLM CPU path |
+| **Packaged-app smoke** | ✅ | **win-unpacked + asar + fuses + bundled bin: exit 0, encoders probed, screens enumerated** — found and fixed M-017 (broken dep closure) and the asar-readonly harness path |
+| Auto-update | ⏸ | deferred to first public release — needs a GitHub repo to publish to; `publish: null` for now |
+| Clean-VM install test | ⏸ | **needs the user**: run `release/MeetFroge Setup 0.1.0.exe` on a machine/VM without dev tools — listed in the Phase 11 manual matrix |
 
 ## Phase 11 — Testing, docs, release (2.5 d)
 

@@ -101,3 +101,13 @@ npm run test:security     # IPC battery
 npm run test:perf         # budget assertions
 npm run test:coverage
 ```
+
+## Release gate additions (v0.1.0)
+
+| Check | How | Status source |
+|---|---|---|
+| Packaged smoke | `MEETFROGE_SMOKE=1 release/win-unpacked/MeetFroge.exe` → smoke.json in `%APPDATA%/MeetFroge/out/` | automated, must pass before tagging |
+| Forced software encode | `MEETFROGE_AUTOREC=20 MEETFROGE_FORCE_ENCODER=libx264` → ≥60% duration, 4 tracks | automated |
+| Clean-VM install | run the NSIS installer on a machine without dev tools; record → transcript → summary | **manual, needs the user** |
+| Screen-reader pass | Narrator over Record + Library + Settings | manual |
+| 3-hour recording | duration + drift + disk behavior | manual |
