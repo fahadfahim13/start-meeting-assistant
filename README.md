@@ -6,7 +6,9 @@ Records your meetings — camera, screen, microphone and desktop audio — then 
 reads what was on screen, and writes you a summary. Everything runs on your own machine.
 No cloud, no accounts, no API keys, no subscription.
 
-> **Status: pre-alpha.** Under active development. Not yet usable. See [PROGRESS.md](PROGRESS.md).
+> **Status: 0.1.0 alpha.** The full loop works — record, transcribe, diarize, analyze the
+> screen, summarize, search — verified by automated end-to-end tests with content assertions.
+> Windows-only, unsigned installer. See [PROGRESS.md](PROGRESS.md) for what is deferred.
 
 ---
 
@@ -41,9 +43,9 @@ This is the point of the project, so it is stated precisely:
 4. **Recording is always visible** and cannot be hidden by any setting.
 5. **Crash logs stay on your disk** and are never transmitted.
 
-Optional AES-256-GCM encryption at rest is available, with the key wrapped by Windows DPAPI.
-See [PRIVACY.md](PRIVACY.md) for what that does and does not protect against — we are specific
-about the limits rather than vague about the guarantees.
+Encryption at rest is deferred (see [ADR-012](DECISIONS.md)) — full-disk encryption
+(BitLocker) covers that threat more completely, and [PRIVACY.md](PRIVACY.md) is specific
+about limits rather than vague about guarantees.
 
 ## Requirements
 
@@ -88,11 +90,11 @@ Full setup, including building whisper.cpp and llama.cpp with Vulkan, is in
 | Shell | Electron 44 (pinned) + React + TypeScript |
 | Recording | ffmpeg — Desktop Duplication capture, hardware H.264 encode |
 | Desktop audio | Chromium WASAPI loopback → PCM → ffmpeg |
-| Transcription | whisper.cpp (Vulkan-accelerated) |
-| VAD + diarization | sherpa-onnx |
+| Transcription | whisper.cpp with built-in silero VAD |
+| Diarization | sherpa-onnx (pyannote + ERes2Net) |
 | OCR | tesseract.js |
 | Vision + summary | llama.cpp `llama-server` — SmolVLM2, Qwen3-4B |
-| Storage | SQLite (better-sqlite3) with FTS5 |
+| Storage | SQLite (Node's built-in `node:sqlite`) with FTS5 |
 
 No Python, no PyTorch, no cloud services. Architecture and the reasoning behind each choice are
 in [docs/architecture.md](docs/architecture.md) and [DECISIONS.md](DECISIONS.md).

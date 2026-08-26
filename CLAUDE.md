@@ -126,29 +126,29 @@ npm run spike:4        # llama.cpp Vulkan benchmark
 
 ## Current state
 
-**Phase 1 capture engine substantially complete.** The app records screen + camera + mic +
-system audio into one MKV through the full production path, verified by unattended E2E.
-See `PROGRESS.md`.
+**v0.1.0 tagged. All 12 phases core-complete.** See `PROGRESS.md` for the deferred list
+(auto-update, encryption-at-rest per ADR-012, storage migration, pdf/docx export,
+list virtualization) and `docs/testing.md` for the manual release gates still open
+(clean-VM install, Narrator pass, 3-hour recording).
 
-- Spikes 1, 2 PASSED (B-005, B-006). Spike 3 CPU baseline measured: **0.72x realtime**
-  (B-007). Spike 3 Vulkan (B-008) blocked on the user running
-  `scripts/install-build-toolchain.ps1` elevated. Spike 4 pending model re-download (M-009).
-- Test harnesses: `npm run smoke` (boot+probe), `MEETFROGE_AUTOREC=N` (unattended recording
-  E2E), `scripts/sync-test.mjs` (mic-vs-system alignment).
-- Known open issue **R-11**: mic lags system audio ~120 ms systematically. Do NOT try
-  `-use_wallclock_as_timestamps` — it breaks the recording (M-010).
+- 105 unit tests · 10+ E2E harnesses (recording, pause, crash recovery, sync,
+  transcription content, diarization, visual, summary, forced-software-encode,
+  packaged smoke) · 0 npm audit findings
+- Installer: `npx electron-builder --win` → release/. Packaged smoke:
+  `MEETFROGE_SMOKE=1 release/win-unpacked/MeetFroge.exe` (result in %APPDATA%/MeetFroge/out/)
+- B-008 (whisper Vulkan) still awaits the build toolchain install.
 
-### Things that will bite you (all learned the hard way — details in MISTAKES.md)
+### Things that will bite you (details in MISTAKES.md — 17 entries)
 
-- **Electron produces no stdout on Windows** (M-004). Assert on exit codes and files.
-  `--enable-logging` for interactive debugging.
-- **`h264_amf` needs an explicit nv12 conversion** (M-001) — on EVERY chain, camera included
-  (M-007 sibling). Probe encoders with real encodes.
-- **Exclusive devices** (M-007): the renderer preview must release the camera BEFORE
-  session:start. `previewsSuspended` in the store handles this — keep it.
-- **Ring pre-roll** (M-008): the loopback ring clears on ffmpeg connect. Removing that
-  reintroduces a ~400 ms system-track shift.
-- **Downloads** (M-009): verify byte count/hash; never trust an exit code read through a pipe.
+- **Electron: no stdout on Windows** (M-004); packaged failures can be a modal
+  Error dialog you cannot see — check window title + child-process tree (M-017).
+- **h264_amf needs explicit nv12** on EVERY chain (M-001, M-007).
+- **Exclusive devices**: previews release before recording (M-007); keep previewsSuspended.
+- **asar is read-only** — harness/app writes go to userData when packaged (M-017).
+- **Never hand-curate the node_modules closure** in electron-builder files (M-017).
+- **probeCapabilities is memoized** — do not add per-call probes back (M-016).
+- **Downloads/models**: verify bytes+hash, never existence (M-009, M-013).
+- **Do not try wallclock timestamps on the audio inputs** (M-010, R-11).
 
 ## Per-phase discipline
 

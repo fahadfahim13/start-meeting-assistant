@@ -49,7 +49,10 @@ problem, not enough to reconstruct a conversation.
 
 ## Encryption at rest
 
-Optional, off by default, toggleable in Settings.
+**Not yet shipped** — deferred by [ADR-012](DECISIONS.md): the database driver has no
+encryption path yet, and encrypting only the videos while transcripts stayed readable would
+be protection theater. Use full-disk encryption (BitLocker); it covers the same threat
+completely. The design below is retained for when the feature lands.
 
 **What it does.** Media files are encrypted with AES-256-GCM. The database is encrypted with
 SQLCipher. The data key is generated locally and wrapped using Windows DPAPI through Electron's
