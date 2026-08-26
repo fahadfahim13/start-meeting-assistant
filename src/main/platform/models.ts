@@ -9,11 +9,17 @@ import { AppError } from '@shared/errors'
  * there by hand — docs/setup.md). MEETFROGE_MODELS_DIR overrides for testing.
  */
 
-export type ModelId = 'whisper-large-v3-turbo-q5' | 'silero-vad'
+export type ModelId =
+  | 'whisper-large-v3-turbo-q5'
+  | 'silero-vad'
+  | 'pyannote-segmentation'
+  | '3dspeaker-embedding'
 
 const MODEL_FILES: Record<ModelId, string> = {
   'whisper-large-v3-turbo-q5': 'ggml-large-v3-turbo-q5_0.bin',
   'silero-vad': 'ggml-silero-v5.1.2.bin',
+  'pyannote-segmentation': 'pyannote-segmentation-3-0.onnx',
+  '3dspeaker-embedding': '3dspeaker-eres2net-base.onnx',
 }
 
 export function modelsDir(): string {

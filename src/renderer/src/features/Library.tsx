@@ -16,6 +16,8 @@ interface Segment {
   startMs: number
   endMs: number
   speaker: string | null
+  speakerId: string | null
+  certain: boolean
   track: string
   text: string
 }
@@ -77,6 +79,15 @@ export default function Library(): React.JSX.Element {
       if (r.ok) setSegments(r.data.segments)
     })
   }, [selected, items])
+
+  const renameSpeaker = async (seg: Segment): Promise<void> => {
+    if (!seg.speakerId || !selected) return
+    const name = window.prompt(`Rename "${seg.speaker ?? seg.track}" to:`, seg.speaker ?? '')
+    if (!name || !name.trim()) return
+    await api.invoke('speakers:rename', { speakerId: seg.speakerId, displayName: name.trim().slice(0, 80) })
+    const r = await api.invoke('transcript:get', { meetingId: selected })
+    if (r.ok) setSegments(r.data.segments)
+  }
 
   const doExport = async (format: 'txt' | 'srt' | 'vtt' | 'json' | 'md'): Promise<void> => {
     if (!selected) return
@@ -154,7 +165,13 @@ export default function Library(): React.JSX.Element {
           {filtered.map((s) => (
             <div key={s.id} role="listitem" className={`segment track-${s.track}`}>
               <span className="seg-time">{fmtClock(s.startMs)}</span>
-              <span className={`seg-speaker ${s.track === 'mic' ? 'certain' : ''}`}>{s.speaker ?? s.track}</span>
+              <button
+                className={`seg-speaker ${s.certain ? 'certain' : ''}`}
+                title={s.certain ? 'Identified from your microphone track (exact)' : 'Diarized (probabilistic) — click to rename'}
+                onClick={() => void renameSpeaker(s)}
+              >
+                {s.speaker ?? s.track}
+              </button>
               <span className="seg-text">{s.text}</span>
             </div>
           ))}

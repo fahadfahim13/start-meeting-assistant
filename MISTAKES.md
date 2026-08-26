@@ -253,3 +253,26 @@ confirms the same through the recovery path.
 **Rule:** any ffmpeg invocation that must preserve ALL streams needs an explicit `-map 0`.
 Default stream selection is lossy by design. And E2E checks must assert track COUNTS, not
 just success — that assertion is what caught this.
+
+---
+
+## M-012 — sherpa-onnx readWave fails inside Electron: "External buffers are not allowed"
+
+**Date:** 2026-08-26  **Area:** pipeline/diarization  **Cost:** one E2E cycle to find, isolated in one more
+**Symptom:** diarization worked perfectly in plain Node (spike 05), then threw
+`External buffers are not allowed` inside the Electron app. The stage's degradation path
+correctly skipped it and kept the You/Others split — the failure was graceful, but the
+feature was silently absent.
+**Cause:** Electron's V8 memory cage forbids `napi_create_external_buffer`. sherpa-onnx's
+`readWave()` returns samples through an external buffer. Everything else in the addon —
+constructing the diarizer, `process()` consuming a plain `Float32Array` — is fine.
+**Fix:** read the WAV ourselves (a 30-line RIFF chunk-walker producing a normal
+`Float32Array`) and call `process()` with that. Verified inside real Electron: 2 speakers,
+correct turns, 10.1 s for 29 s of audio.
+**Verified:** `/tmp/sherpa-check` harness — `readWave` throws, manual parse + `process()`
+returns the full turn list. Then the app-level E2E.
+**Rule:** a native addon that passes in plain Node can still fail inside Electron — test
+native addons IN Electron before integrating, and when one fails, isolate WHICH call is
+affected before replacing the whole dependency. One 30-line reader saved the addon.
+Also (again, see M-shell history): never write Windows paths with backslashes inside
+bash-heredoc'd JS — two escaping layers eat them. Forward slashes work everywhere.

@@ -4,6 +4,7 @@ import path from 'node:path'
 import { JobQueue, type QueueEvents } from './queue'
 import { extractAudio, type ExtractedTrack } from './stages/extract-audio'
 import { transcribeTrack } from './stages/transcribe'
+import { alignTurns, diarizationAvailable, diarizeWav } from './stages/diarize'
 import * as meetings from '@main/db/repositories/meetings'
 import * as transcripts from '@main/db/repositories/transcripts'
 import { modelAvailable } from '@main/platform/models'
@@ -88,12 +89,51 @@ export function createPipeline(events: QueueEvents): JobQueue {
       idx++
     }
 
-    // Transcription artifacts are transient; the DB is the durable output.
-    rmSync(workDirFor(meeting.id), { recursive: true, force: true })
+    // Work dir stays: the diarize stage still needs system.wav. Cleanup is its job.
     return 'done'
+  })
+
+  queue.registerStage('diarize', async (ctx) => {
+    const meeting = meetings.getMeeting(ctx.job.meeting_id)
+    if (!meeting) throw new Error('meeting not found')
+    const cleanup = (): void => rmSync(workDirFor(meeting.id), { recursive: true, force: true })
+
+    try {
+      // Degradation (Principle 3): no system audio, no models, or a silent
+      // system track -> the You/Others split from track separation stands.
+      if (meeting.has_system_audio !== 1) return 'skipped'
+      if (!diarizationAvailable()) {
+        console.warn('[pipeline] diarization models missing - keeping track-based split')
+        return 'skipped'
+      }
+      const extractJob = queue.jobsFor(meeting.id).find((j) => j.stage === 'extract')
+      const cp = extractJob?.checkpoint ? (JSON.parse(extractJob.checkpoint) as { tracks: ExtractedTrack[] }) : null
+      const systemTrack = cp?.tracks.find((t) => t.track === 'system')
+      if (!systemTrack || systemTrack.isSilent) return 'skipped'
+      if (!existsSync(systemTrack.wavPath)) {
+        console.warn('[pipeline] system.wav gone - diarization skipped (re-run processing to redo)')
+        return 'skipped'
+      }
+
+      ctx.setProgress(10)
+      const turns = diarizeWav(systemTrack.wavPath)
+      ctx.setProgress(80)
+
+      const systemSegs = transcripts
+        .transcriptFor(meeting.id)
+        .filter((r) => r.track === 'system')
+        .map((r) => ({ startMs: r.start_ms, endMs: r.end_ms }))
+      const assignments = alignTurns(systemSegs, turns)
+      const updated = transcripts.applyDiarization(meeting.id, assignments)
+      const speakers = new Set(assignments.filter((a) => a !== null))
+      console.log(`[pipeline] diarization: ${speakers.size} remote speaker(s), ${updated}/${systemSegs.length} segments attributed`)
+      return 'done'
+    } finally {
+      cleanup()
+    }
   })
 
   return queue
 }
 
-export const PROCESSING_STAGES = ['extract', 'transcribe']
+export const PROCESSING_STAGES = ['extract', 'transcribe', 'diarize']

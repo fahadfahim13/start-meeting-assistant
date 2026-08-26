@@ -88,6 +88,8 @@ function bootstrap(): void {
       startMs: r.start_ms,
       endMs: r.end_ms,
       speaker: r.speaker_label ?? null,
+      speakerId: r.speaker_id,
+      certain: r.speaker_certain === 1,
       track: r.track,
       text: r.text,
     })),
@@ -120,6 +122,11 @@ function bootstrap(): void {
 
   handle('jobs:retry', async ({ jobId }) => {
     pipeline.retry(jobId)
+    return { ok: true }
+  })
+
+  handle('speakers:rename', async ({ speakerId, displayName }) => {
+    transcriptsRepo.renameSpeaker(speakerId, displayName)
     return { ok: true }
   })
 

@@ -82,14 +82,18 @@ Residual: mic↔system skew grows at pause joins (309 ms over one pause) — fol
 | Export txt / srt / vtt / json / md | ✅ | pure generators, 6 unit tests |
 | **E2E: real-speech content assertion** | ✅ | **JFK played through speakers → recorded → pipeline → word-perfect transcript on the system track at correct timestamps. 2/2 phrases found.** |
 
-## Phase 4 — Diarization (1.5 d)
+## Phase 4 — Diarization (1.5 d) — ✅ CORE COMPLETE
 
 | Task | Status | Notes |
 |---|---|---|
-| sherpa-onnx diarization on system track only | ⬜ | |
-| Overlap-based alignment to Whisper segments | ⬜ | |
-| Speaker renaming, certain vs probabilistic UI | ⬜ | |
-| Degradation to track-based split | ⬜ | |
+| sherpa-onnx diarization on system track only | ✅ | prebuilt N-API addon (no toolchain); pyannote seg + eres2net embeddings; JS WAV reader replaces readWave (M-012 — Electron forbids external buffers) |
+| Overlap-based alignment to Whisper segments | ✅ | max-overlap, tie→longer turn; 5 unit tests |
+| Speaker renaming, certain vs probabilistic UI | ✅ | click-to-rename; mic speakers green/solid (exact), diarized amber/dotted |
+| Degradation to track-based split | ✅ | **exercised in production** by M-012: when diarize failed, the You/Others split stood — exactly as designed |
+| **E2E: two-voice TTS through the real app** | ✅ | **Speaker 1 / Speaker 2 correctly separated, all 3 stages done. 2/2 voices, correct sentences.** |
+
+Known: whisper segments that straddle a turn change get the dominant speaker (segment-level
+alignment). Word-level refinement is a post-1.0 idea.
 
 ## Phase 5 — Visual analysis (3.5 d)
 

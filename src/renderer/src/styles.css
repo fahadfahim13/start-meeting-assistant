@@ -265,3 +265,9 @@ button.small { padding: 5px 10px; font-size: 12px; text-transform: uppercase; }
 .seg-speaker.certain { color: var(--green); }
 .seg-text { color: var(--text); }
 .empty { color: var(--muted); padding: 16px 4px; }
+
+button.seg-speaker {
+  background: none; border: none; padding: 0; text-align: left;
+  color: var(--amber); font-size: 13px; cursor: pointer; text-decoration: underline dotted;
+}
+button.seg-speaker.certain { color: var(--green); text-decoration: none; cursor: default; }

@@ -107,6 +107,23 @@ curl -L -o "$APPDATA/meetfroge/models/ggml-silero-v5.1.2.bin" \
 VAD is whisper-cli's built-in silero integration (`--vad`), so Phase 3 needs no sherpa-onnx;
 sherpa arrives in Phase 4 for diarization.
 
+### Diarization models (Phase 4)
+
+`sherpa-onnx-node` ships prebuilt N-API binaries (no toolchain needed). Its native DLLs live in
+`node_modules/sherpa-onnx-win-x64` and must be on `PATH` before the addon loads — the diarize
+stage handles that. **Packaging note (Phase 10): `.node`/`.dll` files cannot load from asar —
+`sherpa-onnx-*` needs `asarUnpack`.**
+
+```bash
+cd "$APPDATA/meetfroge/models"
+curl -L -o seg.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2
+tar xjf seg.tar.bz2 && mv sherpa-onnx-pyannote-segmentation-3-0/model.onnx pyannote-segmentation-3-0.onnx && rm -rf sherpa-onnx-pyannote-segmentation-3-0 seg.tar.bz2
+# note: "recongition" is the real (misspelled) tag name in the sherpa-onnx repo
+curl -L -o 3dspeaker-eres2net-base.onnx https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx
+```
+
+Standalone check without the app: `node spikes/05-diarize/diarize-test.cjs <16k-mono.wav>`.
+
 ## E2E harnesses
 
 All write JSON verdicts to `out/` and communicate via exit codes (M-004):

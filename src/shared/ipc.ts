@@ -81,6 +81,8 @@ export const INVOKE_CHANNELS = {
           startMs: z.number(),
           endMs: z.number(),
           speaker: z.string().nullable(),
+          speakerId: z.string().nullable(),
+          certain: z.boolean(),
           track: z.string(),
           text: z.string(),
         }),
@@ -105,6 +107,10 @@ export const INVOKE_CHANNELS = {
   },
   'jobs:retry': {
     request: z.object({ jobId: z.string().uuid() }),
+    response: z.object({ ok: z.boolean() }),
+  },
+  'speakers:rename': {
+    request: z.object({ speakerId: z.string().uuid(), displayName: z.string().min(1).max(80) }),
     response: z.object({ ok: z.boolean() }),
   },
 } as const

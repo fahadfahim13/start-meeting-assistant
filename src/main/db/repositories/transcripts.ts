@@ -12,6 +12,7 @@ export interface TranscriptRow {
   end_ms: number
   text: string
   speaker_label?: string | null
+  speaker_certain?: number | null
 }
 
 export function ensureSpeaker(meetingId: string, source: 'mic' | 'system', label: string, isCertain: boolean): string {
@@ -69,7 +70,7 @@ export function replaceTrackSegments(
 export function transcriptFor(meetingId: string): TranscriptRow[] {
   return getDb()
     .prepare(
-      `SELECT ts.*, COALESCE(sp.display_name, sp.label) AS speaker_label
+      `SELECT ts.*, COALESCE(sp.display_name, sp.label) AS speaker_label, sp.is_certain AS speaker_certain
        FROM transcript_segments ts
        LEFT JOIN speakers sp ON sp.id = ts.speaker_id
        WHERE ts.meeting_id = ?
@@ -99,4 +100,56 @@ export function searchTranscripts(query: string, limit = 50): SearchHit[] {
        ORDER BY rank LIMIT ?`,
     )
     .all(phrase, limit) as unknown as SearchHit[]
+}
+
+/**
+ * Phase 4: replace the generic "Others" attribution on the system track with
+ * diarized "Speaker N" identities. Assignments align 1:1 with the system-track
+ * segments ordered by start_ms; null keeps the generic speaker.
+ */
+export function applyDiarization(meetingId: string, assignments: (number | null)[]): number {
+  const db = getDb()
+  const systemSegs = db
+    .prepare(`SELECT id FROM transcript_segments WHERE meeting_id = ? AND track = 'system' ORDER BY start_ms`)
+    .all(meetingId) as unknown as { id: string }[]
+
+  const speakerIds = new Map<number, string>()
+  let updated = 0
+  db.exec('BEGIN')
+  try {
+    for (let i = 0; i < systemSegs.length && i < assignments.length; i++) {
+      const n = assignments[i]
+      if (n === null || n === undefined) continue
+      let sid = speakerIds.get(n)
+      if (!sid) {
+        sid = ensureSpeaker(meetingId, 'system', `Speaker ${n + 1}`, false)
+        speakerIds.set(n, sid)
+      }
+      db.prepare('UPDATE transcript_segments SET speaker_id = ? WHERE id = ?').run(sid, systemSegs[i]!.id)
+      updated++
+    }
+    db.exec('COMMIT')
+  } catch (e) {
+    db.exec('ROLLBACK')
+    throw e
+  }
+  return updated
+}
+
+export function renameSpeaker(speakerId: string, displayName: string): void {
+  getDb().prepare('UPDATE speakers SET display_name = ? WHERE id = ?').run(displayName, speakerId)
+}
+
+export interface SpeakerRow {
+  id: string
+  label: string
+  display_name: string | null
+  source: string
+  is_certain: number
+}
+
+export function speakersFor(meetingId: string): SpeakerRow[] {
+  return getDb()
+    .prepare('SELECT id, label, display_name, source, is_certain FROM speakers WHERE meeting_id = ?')
+    .all(meetingId) as unknown as SpeakerRow[]
 }
