@@ -143,8 +143,15 @@ export async function chat(input: {
     signal: AbortSignal.timeout(10 * 60_000),
   })
   if (!res.ok) throw new Error(`llm http ${res.status}: ${(await res.text()).slice(0, 300)}`)
-  const body = (await res.json()) as { choices?: { message?: { content?: string } }[] }
-  return body.choices?.[0]?.message?.content ?? ''
+  const body = (await res.json()) as {
+    choices?: { message?: { content?: string }; finish_reason?: string }[]
+  }
+  const content = body.choices?.[0]?.message?.content ?? ''
+  if (content.length === 0) {
+    // An empty reply is an upstream failure, not a valid answer (M-018).
+    throw new Error(`llm returned empty content (finish_reason=${body.choices?.[0]?.finish_reason ?? 'unknown'})`)
+  }
+  return content
 }
 
 export async function stopLlm(): Promise<void> {

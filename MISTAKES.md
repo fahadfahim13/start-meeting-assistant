@@ -380,3 +380,26 @@ it wrong exactly once. And for a GUI-subsystem app, "hangs silently" often means
 dialog is showing where no one can see it": check the WINDOW TITLE and child-process tree
 before theorizing. Dev-vs-packaged behavioral differences come from the package, not the code
 — bisect the package inputs.
+
+---
+
+## M-019 — Two active audio outputs: playback and loopback landed on different endpoints
+
+**Date:** 2026-08-26  **Area:** capture/audio  **Cost:** two "inconclusive" sync runs during the
+final verification sweep
+**Symptom:** the sync harness reported "burst not found in the system track" while the MIC
+track clearly heard the burst acoustically — sound played audibly, loopback recorded 23.6 s of
+pure digital zeros.
+**Cause:** the user plugged in headphones mid-evening (the endpoint registry showed Headphone
+going from "unplugged" in the morning scan to ACTIVE now). With two active render endpoints,
+the tone played through one while Chromium's WASAPI loopback captured the other. Every
+component behaved correctly; the topology changed underneath them. Timing matched exactly:
+diarization passed at 21:10, sync failed at 21:35.
+**Fix:** the harness now counts active render endpoints up front and warns with instructions
+instead of failing mysteriously. The production app already carries the right defence — the
+pre-flight System level meter shows silence BEFORE recording starts, and
+troubleshooting.md documented this exact scenario in advance.
+**Rule:** an audio pipeline's ground truth includes the ENDPOINT TOPOLOGY, which the user can
+change at any moment by plugging in a cable. Diagnostics that compare an acoustic path (mic)
+against a digital path (loopback) can localize this in one look — the mic hearing what
+loopback misses says "wrong endpoint", not "broken capture".

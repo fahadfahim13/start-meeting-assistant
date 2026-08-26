@@ -162,12 +162,21 @@ export async function summarizeMeeting(input: {
           content: `Extract notes from this meeting chunk (${i + 1}/${chunks.length}).\n<transcript>\n${renderChunk(chunks[i]!)}\n</transcript>`,
         },
       ],
-      maxTokens: 700,
+      maxTokens: 900,
       responseFormat: CHUNK_NOTES_JSON_SCHEMA,
     })
-    const parsed = ChunkNotesSchema.safeParse(JSON.parse(reply))
-    if (parsed.success) allNotes.push(parsed.data)
-    else console.warn(`[summarize] chunk ${i} notes failed validation — skipped`, parsed.error.issues.slice(0, 2))
+    // M-018: a truncated/empty reply (max_tokens mid-JSON, transient server
+    // state) must skip THIS chunk, not kill the stage — the unguarded parse
+    // threw once in the full-verification sweep and failed all 3 retries.
+    let parsedJson: unknown = null
+    try {
+      parsedJson = JSON.parse(reply)
+    } catch {
+      console.warn(`[summarize] chunk ${i}: reply was not valid JSON (${reply.length} chars) — skipped`)
+    }
+    const parsed = parsedJson === null ? null : ChunkNotesSchema.safeParse(parsedJson)
+    if (parsed?.success) allNotes.push(parsed.data)
+    else if (parsed) console.warn(`[summarize] chunk ${i} notes failed validation — skipped`, parsed.error.issues.slice(0, 2))
     input.onProgress(Math.round(((i + 1) / (chunks.length + 1)) * 80))
   }
   if (allNotes.length === 0) throw new Error('every map chunk failed validation')
