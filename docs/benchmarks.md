@@ -246,7 +246,32 @@ over the whole log, which matches the build-features banner (`VULKAN = 0`) even 
 Detection now requires an actual Vulkan device-init line. A loose grep here would have let a
 failed Vulkan build masquerade as a Vulkan result — the exact failure mode the check exists for.
 
-**B-008 (Vulkan) remains blocked** on the build toolchain install.
+### B-008 — whisper.cpp Vulkan on Vega 7 ✅ measured (no toolchain needed)
+
+**Date:** 2026-08-26 · **Spike:** 3 · **Method:** identical 600 s audio and binary as B-007
+
+| | CPU (B-007) | **Vulkan (B-008)** |
+|---|---|---|
+| Elapsed | 832.9 s | **279.8 s** |
+| Realtime factor | 0.72× | **2.144×** |
+| Speedup | — | **2.98×** |
+| Backend confirmed | `no GPU found` | `using Vulkan0 backend` (AMD proprietary driver) |
+| Output sanity | word-perfect JFK | word-perfect JFK |
+
+**How, without the toolchain:** whisper.cpp's official CPU release and llama.cpp's official
+Vulkan release share ggml's dynamic-backend loader (the `ggml-cpu-<arch>.dll` variants are the
+tell). Dropping llama's `ggml-vulkan.dll` beside `whisper-cli.exe` made it load and use the
+GPU — zero compilation, two official binaries. The planned 8–12 GB VS/CMake/VulkanSDK install
+was unnecessary. **Caveat:** this couples the two releases' ggml ABIs; pin both versions
+together and re-verify on any bump (the backend prints its device line — assert on it).
+
+**Product math:** a 1-hour meeting transcribes in ~28 min raw, **~12–17 min with VAD gating**
+— inside the 20-minute budget (§2.4). And the app bundle already ships `ggml-vulkan.dll`
+(it rode along with the llama DLL set in Phase 5), so installed-app transcription has been
+GPU-accelerated since then; whisper-cli defaults to GPU when a device is found.
+
+The published "12×" (RDNA2 680M) did not transfer to GCN5 — 2.98× is the real number here.
+Same lesson as B-009/B-010: architecture generations do not share speedups.
 
 ---
 
@@ -295,7 +320,7 @@ To be filled by remaining Phase 0b spikes. **Do not populate from estimates.**
 | ID | Measurement | Status | Expectation (to be confirmed or refuted) |
 |---|---|---|---|
 | B-007 | whisper.cpp `large-v3-turbo`, CPU, 10 min audio | ✅ **measured: 0.72×** | expectation was ~0.3× — **beaten by 2.4×**, see below |
-| B-008 | whisper.cpp `large-v3-turbo`, Vulkan, 10 min audio | ⬜ spike 3 | 3–4× realtime — **but measured on RDNA2; Vega 7 is GCN5, may differ substantially** |
+| B-008 | whisper.cpp `large-v3-turbo`, Vulkan, 10 min audio | ✅ **measured: 2.144×** | expected 3–4× on RDNA2; GCN5 delivers 2.1× — see below |
 | B-009 | llama.cpp Qwen3-4B Q4_K_M, CPU: prompt / generation t/s | ✅ **51.9 / 6.96** | expected ~34 / ~10 — see below |
 | B-010 | llama.cpp Qwen3-4B Q4_K_M, Vulkan: prompt / generation t/s | ✅ **56.3 / 9.68** | expected ~76 / ~10 — see below |
 | B-011 | Recording CPU and RAM at Balanced preset | ⬜ Phase 1 | < 15% CPU, < 400 MB RAM |

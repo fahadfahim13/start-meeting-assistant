@@ -9,19 +9,6 @@ marked `retired`, with the evidence that retired it — so the reasoning stays v
 
 ## Active
 
-### R-02 · whisper.cpp Vulkan slow or broken on Vega 7 🟠
-
-**Probability:** medium · **Phase:** 0, 3 · **Status:** open
-
-The published ~12× iGPU speedup was measured on a Radeon 680M (RDNA2). The reference machine has
-a Vega 7 (GCN5), two architecture generations older. The speedup may be much smaller, or the
-Vulkan path may be unstable.
-
-**Mitigation.** Spike 3 measures it directly rather than assuming. CPU fallback is functional at
-~0.3× realtime — a 1-hour meeting would take ~3 hours, which is slow but not broken. If Vulkan
-disappoints, drop the default model tier to `medium` or `small` and adjust the first-run
-recommendation accordingly.
-
 ### R-04 · h264_amf failing on other AMD drivers 🟠
 
 **Probability:** medium · **Phase:** 1 · **Status:** partially mitigated
@@ -98,6 +85,20 @@ native addons). This is why the tracking files exist at all.
 ---
 
 ## Retired
+
+### R-02 · whisper.cpp Vulkan on Vega 7 🟠 → retired 2026-08-26
+
+**Was:** the published ~12× iGPU speedup came from RDNA2; GCN5 might deliver far less, or the
+Vulkan path might be unstable.
+
+**Retired by:** [benchmarks B-008](benchmarks.md). Measured **2.144× realtime (2.98× over
+CPU)** on the same 600 s audio, backend confirmed (`using Vulkan0 backend`), output
+word-perfect. A 1-hour meeting lands at ~12–17 min with VAD — inside budget. The 12× did not
+transfer (correct instinct), but the path is solid. Achieved with zero compilation: llama.cpp's
+`ggml-vulkan.dll` loads into whisper.cpp's official build via ggml's dynamic-backend system.
+
+**Residual:** the DLL pairing couples two releases' ggml ABIs — pin together, re-verify on
+bumps via the backend's device line.
 
 ### R-01 · Electron loopback audio broken on the pinned version 🔴 → retired 2026-08-25
 
