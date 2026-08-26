@@ -52,6 +52,61 @@ export const INVOKE_CHANNELS = {
     request: z.object({}),
     response: SessionStatusSchema,
   },
+  'meetings:list': {
+    request: z.object({ limit: z.number().int().min(1).max(200) }),
+    response: z.object({
+      items: z.array(
+        z.object({
+          id: z.string(),
+          title: z.string(),
+          startedAt: z.number(),
+          durationMs: z.number().nullable(),
+          state: z.string(),
+          bytes: z.number().nullable(),
+          jobs: z.array(z.object({ stage: z.string(), state: z.string(), progress: z.number() })),
+        }),
+      ),
+    }),
+  },
+  'meetings:process': {
+    request: z.object({ meetingId: z.string().uuid() }),
+    response: z.object({ enqueued: z.boolean() }),
+  },
+  'transcript:get': {
+    request: z.object({ meetingId: z.string().uuid() }),
+    response: z.object({
+      segments: z.array(
+        z.object({
+          id: z.string(),
+          startMs: z.number(),
+          endMs: z.number(),
+          speaker: z.string().nullable(),
+          track: z.string(),
+          text: z.string(),
+        }),
+      ),
+    }),
+  },
+  'transcript:search': {
+    request: z.object({ query: z.string().min(1).max(200) }),
+    response: z.object({
+      hits: z.array(
+        z.object({ meetingId: z.string(), segmentId: z.string(), text: z.string(), startMs: z.number() }),
+      ),
+    }),
+  },
+  'transcript:export': {
+    // The renderer names a FORMAT, never a path — main opens a save dialog.
+    request: z.object({
+      meetingId: z.string().uuid(),
+      format: z.enum(['txt', 'srt', 'vtt', 'json', 'md']),
+    }),
+    response: z.object({ saved: z.boolean(), fileName: z.string().nullable() }),
+  },
+  'jobs:retry': {
+    request: z.object({ jobId: z.string().uuid() }),
+    response: z.object({ ok: z.boolean() }),
+  },
 } as const
 
 export type InvokeChannel = keyof typeof INVOKE_CHANNELS
@@ -61,7 +116,7 @@ export const SEND_CHANNELS = ['loopback:frame'] as const
 export type SendChannel = (typeof SEND_CHANNELS)[number]
 
 /** Main -> renderer event channels. */
-export const EVENT_CHANNELS = ['session:state', 'loopback:stats'] as const
+export const EVENT_CHANNELS = ['session:state', 'loopback:stats', 'jobs:update'] as const
 export type EventChannel = (typeof EVENT_CHANNELS)[number]
 
 /**
@@ -88,4 +143,5 @@ export interface MeetFrogeApi {
   sendPcmFrame(buffer: ArrayBuffer): void
   onSessionState(cb: (status: unknown) => void): () => void
   onLoopbackStats(cb: (stats: unknown) => void): () => void
+  onJobsUpdate(cb: (job: unknown) => void): () => void
 }

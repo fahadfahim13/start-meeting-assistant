@@ -86,6 +86,40 @@ npm run fetch:models -- --tier accelerated
 
 All are SHA-256 verified against `models.lock.json` before use. A mismatch deletes the file.
 
+## Dev staging for the transcription pipeline (Phase 3+)
+
+The app resolves binaries from `resources/bin/` and models from
+`%APPDATA%\meetfroge\models\` (override with `MEETFROGE_MODELS_DIR`). Stage them once:
+
+```bash
+# whisper-cli + DLLs (official CPU release; Vulkan build replaces it when available)
+mkdir -p resources/bin
+cp spikes/03-whisper-vulkan/bin-cpu/Release/whisper-cli.exe resources/bin/
+cp spikes/03-whisper-vulkan/bin-cpu/Release/*.dll resources/bin/
+
+# models — hardlink to avoid duplicating 550 MB on the same volume
+mkdir -p "$APPDATA/meetfroge/models"
+ln -f spikes/03-whisper-vulkan/models/ggml-large-v3-turbo-q5_0.bin "$APPDATA/meetfroge/models/"
+curl -L -o "$APPDATA/meetfroge/models/ggml-silero-v5.1.2.bin" \
+  https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin
+```
+
+VAD is whisper-cli's built-in silero integration (`--vad`), so Phase 3 needs no sherpa-onnx;
+sherpa arrives in Phase 4 for diarization.
+
+## E2E harnesses
+
+All write JSON verdicts to `out/` and communicate via exit codes (M-004):
+
+| Command | Proves |
+|---|---|
+| `node scripts/smoke.mjs` | boot, probe, enumeration, crash recovery report |
+| `MEETFROGE_AUTOREC=30 electron .` | unattended 4-stream recording → `out/e2e.json` |
+| `MEETFROGE_AUTOREC=30 MEETFROGE_AUTOPAUSE=1 electron .` | pause/resume path |
+| `node scripts/sync-test.mjs` | mic↔system alignment (tone burst, cross-correlation) |
+| `node scripts/transcribe-test.mjs` | **full pipeline with real speech** — asserts the transcript CONTENT |
+| `MEETFROGE_SEGTIME=8` + kill + `MEETFROGE_SMOKE=1` relaunch | crash recovery (see docs/testing.md) |
+
 ## Environment overrides
 
 Copy `.env.example` to `.env`. There are no secrets — the app makes no authenticated network

@@ -9,6 +9,10 @@ import { SessionManager } from './capture/session'
 import { recoverInterrupted, type RecoveryReport } from './capture/recovery'
 import { getDb, closeDb } from './db'
 import { initTray, updateTray, destroyTray } from './tray'
+import { createPipeline, PROCESSING_STAGES } from './pipeline'
+import { renderTranscript } from './pipeline/export'
+import * as meetingsRepo from './db/repositories/meetings'
+import * as transcriptsRepo from './db/repositories/transcripts'
 
 // A second launch focuses the existing window instead of racing on state.
 if (!app.requestSingleInstanceLock()) {
@@ -20,13 +24,27 @@ if (!app.requestSingleInstanceLock()) {
 function bootstrap(): void {
   let mainWindow: Electron.BrowserWindow | null = null
 
+  const pipeline = createPipeline({
+    onJobUpdate(job) {
+      mainWindow?.webContents.send('jobs:update', job)
+    },
+  })
+
   const sessions = new SessionManager({
     onStatus(status) {
       mainWindow?.webContents.send('session:state', status)
       updateTray(status)
     },
-    onStopped(outputPath) {
-      if (process.env['MEETFROGE_AUTOREC']) void verifyAndExit(outputPath)
+    onStopped(outputPath, meetingId) {
+      // Auto-process on stop (default on). E2E harnesses take over the verdict:
+      // AUTOPROCESS runs the full pipeline and dumps the transcript; plain
+      // AUTOREC verifies the recording only.
+      if (process.env['MEETFROGE_AUTOREC']) {
+        if (process.env['MEETFROGE_AUTOPROCESS'] === '1') void processAndExit(meetingId)
+        else void verifyAndExit(outputPath)
+        return
+      }
+      pipeline.enqueue(meetingId, PROCESSING_STAGES)
     },
   })
 
@@ -39,6 +57,71 @@ function bootstrap(): void {
   handle('session:resume', () => sessions.resume())
   handle('session:stop', () => sessions.stop())
   handle('session:status', async () => sessions.status())
+
+  handle('meetings:list', async ({ limit }) => {
+    const rows = getDb()
+      .prepare(`SELECT * FROM meetings WHERE state IN ('ready','recovered','failed') ORDER BY started_at DESC LIMIT ?`)
+      .all(limit) as unknown as meetingsRepo.MeetingRow[]
+    return {
+      items: rows.map((m) => ({
+        id: m.id,
+        title: m.title,
+        startedAt: m.started_at,
+        durationMs: m.duration_ms,
+        state: m.state,
+        bytes: m.media_bytes,
+        jobs: pipeline.jobsFor(m.id).map((j) => ({ stage: j.stage, state: j.state, progress: j.progress })),
+      })),
+    }
+  })
+
+  handle('meetings:process', async ({ meetingId }) => {
+    const meeting = meetingsRepo.getMeeting(meetingId)
+    if (!meeting) return { enqueued: false }
+    pipeline.enqueue(meetingId, PROCESSING_STAGES)
+    return { enqueued: true }
+  })
+
+  handle('transcript:get', async ({ meetingId }) => ({
+    segments: transcriptsRepo.transcriptFor(meetingId).map((r) => ({
+      id: r.id,
+      startMs: r.start_ms,
+      endMs: r.end_ms,
+      speaker: r.speaker_label ?? null,
+      track: r.track,
+      text: r.text,
+    })),
+  }))
+
+  handle('transcript:search', async ({ query }) => ({
+    hits: transcriptsRepo.searchTranscripts(query).map((h) => ({
+      meetingId: h.meeting_id,
+      segmentId: h.segment_id,
+      text: h.text,
+      startMs: h.start_ms,
+    })),
+  }))
+
+  handle('transcript:export', async ({ meetingId, format }) => {
+    const meeting = meetingsRepo.getMeeting(meetingId)
+    if (!meeting) return { saved: false, fileName: null }
+    const rows = transcriptsRepo.transcriptFor(meetingId)
+    const content = renderTranscript(format, rows, meeting.title)
+
+    const { dialog } = await import('electron')
+    const { canceled, filePath } = await dialog.showSaveDialog({
+      defaultPath: `${meeting.title.replace(/[<>:"/\\|?*]/g, '_').slice(0, 80)}.${format}`,
+      filters: [{ name: format.toUpperCase(), extensions: [format] }],
+    })
+    if (canceled || !filePath) return { saved: false, fileName: null }
+    writeFileSync(filePath, content, 'utf8')
+    return { saved: true, fileName: path.basename(filePath) }
+  })
+
+  handle('jobs:retry', async ({ jobId }) => {
+    pipeline.retry(jobId)
+    return { ok: true }
+  })
 
   // Real-time PCM path: fire-and-forget, length-checked, only while recording.
   ipcMain.on('loopback:frame', (_event, buffer: ArrayBuffer) => {
@@ -63,6 +146,9 @@ function bootstrap(): void {
     try {
       getDb()
       recoveryReports = await recoverInterrupted()
+      // Jobs a crash left 'running' go back to 'pending'; then resume work.
+      pipeline.resetInterrupted()
+      void pipeline.pump()
     } catch (e) {
       console.error('[db] startup failed:', e)
     }
@@ -156,6 +242,37 @@ function bootstrap(): void {
     const outDir = path.join(app.getAppPath(), 'out')
     mkdirSync(outDir, { recursive: true })
     writeFileSync(path.join(outDir, 'e2e.json'), JSON.stringify(result, null, 2))
+    app.exit(result.ok ? 0 : 1)
+  }
+
+  /** Transcription E2E: run the pipeline on the finished meeting, dump results. */
+  async function processAndExit(meetingId: string): Promise<void> {
+    pipeline.enqueue(meetingId, PROCESSING_STAGES)
+    const terminal = new Set(['done', 'failed', 'cancelled', 'skipped'])
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 2000))
+      const jobs = pipeline.jobsFor(meetingId)
+      if (jobs.length > 0 && jobs.every((j) => terminal.has(j.state))) break
+    }
+    const jobs = pipeline.jobsFor(meetingId)
+    const segments = transcriptsRepo.transcriptFor(meetingId)
+    const result = {
+      transcribeE2e: true,
+      date: new Date().toISOString(),
+      meetingId,
+      jobs: jobs.map((j) => ({ stage: j.stage, state: j.state, error: j.error_detail })),
+      segmentCount: segments.length,
+      segments: segments.map((s) => ({
+        track: s.track,
+        speaker: s.speaker_label,
+        startMs: s.start_ms,
+        text: s.text,
+      })),
+      ok: jobs.every((j) => j.state === 'done' || j.state === 'skipped') && segments.length > 0,
+    }
+    const outDir = path.join(app.getAppPath(), 'out')
+    mkdirSync(outDir, { recursive: true })
+    writeFileSync(path.join(outDir, 'transcribe-e2e.json'), JSON.stringify(result, null, 2))
     app.exit(result.ok ? 0 : 1)
   }
 

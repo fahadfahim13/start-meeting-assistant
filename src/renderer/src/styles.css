@@ -215,3 +215,53 @@ button.stop {
 }
 .state-paused { color: var(--amber); }
 .state-finalizing { color: var(--accent); }
+
+/* ─── Tabs & Library ─────────────────────────────────────────── */
+.tabs { display: flex; gap: 4px; margin-left: 20px; margin-right: auto; }
+.tab {
+  padding: 5px 14px; border: none; background: none; color: var(--muted);
+  border-radius: 6px; font-size: 13px;
+}
+.tab.active { background: var(--panel); color: var(--text); border: 1px solid var(--border); }
+
+.layout-single { flex: 1; padding: 12px; overflow: hidden; display: flex; }
+.library { display: grid; grid-template-columns: 380px 1fr; gap: 12px; flex: 1; min-height: 0; }
+.library .panel { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.meeting-list ul { list-style: none; padding: 0; overflow-y: auto; flex: 1; }
+.meeting-row {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
+  width: 100%; text-align: left; padding: 10px; margin-bottom: 6px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+}
+.meeting-row.selected { border-color: var(--accent); }
+.meeting-title { font-weight: 600; }
+.meeting-meta { color: var(--muted); font-size: 12px; }
+.recovered-tag { color: var(--amber); }
+.meeting-jobs { display: flex; gap: 6px; margin-top: 2px; }
+.job-badge {
+  font-size: 11px; padding: 1px 7px; border-radius: 8px; border: 1px solid var(--border);
+}
+.job-badge.ok { color: var(--green); border-color: var(--green); }
+.job-badge.err { color: var(--red); border-color: var(--red); }
+.job-badge.run { color: var(--accent); border-color: var(--accent); }
+.job-badge.wait { color: var(--muted); }
+button.link { background: none; border: none; color: var(--accent); padding: 0; font-size: 12px; cursor: pointer; }
+
+.transcript-toolbar { display: flex; gap: 10px; margin-bottom: 10px; }
+.transcript-toolbar input {
+  flex: 1; padding: 7px 10px; background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px;
+}
+.export-group { display: flex; gap: 4px; }
+button.small { padding: 5px 10px; font-size: 12px; text-transform: uppercase; }
+.export-msg { color: var(--green); font-size: 12px; margin-bottom: 8px; }
+.segments { overflow-y: auto; flex: 1; }
+.segment {
+  display: grid; grid-template-columns: 48px 90px 1fr; gap: 10px;
+  padding: 6px 4px; border-bottom: 1px solid var(--border); font-size: 13px;
+}
+.seg-time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.seg-speaker { color: var(--amber); }
+.seg-speaker.certain { color: var(--green); }
+.seg-text { color: var(--text); }
+.empty { color: var(--muted); padding: 16px 4px; }

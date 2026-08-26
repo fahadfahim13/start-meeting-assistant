@@ -24,6 +24,12 @@ const api: MeetFrogeApi = {
     ipcRenderer.on('loopback:stats', listener)
     return () => ipcRenderer.removeListener('loopback:stats', listener)
   },
+
+  onJobsUpdate: (cb) => {
+    const listener = (_e: unknown, job: unknown): void => cb(job)
+    ipcRenderer.on('jobs:update', listener)
+    return () => ipcRenderer.removeListener('jobs:update', listener)
+  },
 }
 
 contextBridge.exposeInMainWorld('meetfroge', Object.freeze(api))

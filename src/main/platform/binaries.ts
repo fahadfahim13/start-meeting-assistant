@@ -14,7 +14,7 @@ import { AppError } from '@shared/errors'
  */
 const DEV_WARNED = new Set<string>()
 
-export type BinaryName = 'ffmpeg' | 'ffprobe'
+export type BinaryName = 'ffmpeg' | 'ffprobe' | 'whisper-cli'
 
 export function resolveBinary(name: BinaryName): string {
   const exe = `${name}.exe`

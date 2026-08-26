@@ -68,18 +68,19 @@ logged in `MISTAKES.md` before proceeding.
 
 Residual: mic↔system skew grows at pause joins (309 ms over one pause) — folded into **R-11**.
 
-## Phase 3 — Job queue and transcription (3.5 d)
+## Phase 3 — Job queue and transcription (3.5 d) — ✅ CORE COMPLETE
 
 | Task | Status | Notes |
 |---|---|---|
-| Resumable job runner with checkpointing | ⬜ | |
-| Audio extraction + loudness normalization | ⬜ | |
-| sherpa-onnx VAD (padding + merging) | ⬜ | largest single efficiency win |
-| whisper.cpp subprocess + progress parsing | ⬜ | |
-| Language override (auto/en/bn) | ⬜ | |
-| Mic + system transcript merge | ⬜ | |
-| Transcript UI (virtualized, search, inline edit) | ⬜ | |
-| Export txt / srt / vtt / json / md | ⬜ | |
+| Resumable job runner with checkpointing | ✅ | SQLite-backed, single worker, crash-reset at boot, backoff retries, persist-then-checkpoint ordering |
+| Audio extraction + loudness normalization | ✅ | 16 kHz mono + EBU R128 + per-track silence detection (silent tracks skipped honestly) |
+| VAD | ✅ | **whisper-cli built-in silero** (`--vad`) — no sherpa needed until Phase 4 diarization |
+| whisper.cpp subprocess + progress parsing | ✅ | JSON output, `-pp` progress → job progress |
+| Language override (auto/en/bn) | 🟡 | plumbing in place (ADR-004 default `en`); per-meeting UI control arrives with settings (Phase 7) |
+| Mic + system transcript merge | ✅ | mic="You" (certain), system="Others" until Phase 4; interleaved timeline |
+| Transcript UI (search, exports, job badges) | ✅ | Library tab; virtualization + inline edit deferred to Phase 7 polish |
+| Export txt / srt / vtt / json / md | ✅ | pure generators, 6 unit tests |
+| **E2E: real-speech content assertion** | ✅ | **JFK played through speakers → recorded → pipeline → word-perfect transcript on the system track at correct timestamps. 2/2 phrases found.** |
 
 ## Phase 4 — Diarization (1.5 d)
 
