@@ -14,6 +14,8 @@ import { renderTranscript } from './pipeline/export'
 import * as meetingsRepo from './db/repositories/meetings'
 import * as transcriptsRepo from './db/repositories/transcripts'
 import { getSettings, patchSettings } from './db/repositories/settings'
+import { verifyBinaries } from './security/integrity'
+import { log } from './log'
 import { MODEL_IDS, modelStatus, modelsDir } from './platform/models'
 
 // A second launch focuses the existing window instead of racing on state.
@@ -333,6 +335,11 @@ function bootstrap(): void {
 
   app.whenReady().then(async () => {
     hardenSession()
+
+    // T7: bundled binaries are hash-verified before anything can spawn them.
+    // Fatal when packaged; a dev warning otherwise.
+    const integrity = verifyBinaries()
+    log.info('boot', `binary integrity: ${integrity.ok ? 'ok' : 'FAILED'}`, { problems: integrity.problems.slice(0, 5) })
 
     // DB up + crash recovery BEFORE anything can start a new session.
     try {

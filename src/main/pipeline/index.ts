@@ -10,6 +10,7 @@ import { ocrKeyframes } from './stages/ocr'
 import { captionKeyframes, vlmAvailable } from './stages/vlm'
 import { summarizeMeeting, summarizerAvailable } from './stages/summarize'
 import { getSettings } from '@main/db/repositories/settings'
+import { resolveInside } from '@main/security/paths'
 import * as meetings from '@main/db/repositories/meetings'
 import * as transcripts from '@main/db/repositories/transcripts'
 import { modelAvailable } from '@main/platform/models'
@@ -36,7 +37,7 @@ export function createPipeline(events: QueueEvents): JobQueue {
     if (!meeting) throw new Error('meeting not found')
     if (!meeting.has_mic && !meeting.has_system_audio) return 'skipped'
 
-    const mediaPath = path.join(app.getPath('userData'), meeting.media_path)
+    const mediaPath = resolveInside(app.getPath('userData'), meeting.media_path)
     if (!existsSync(mediaPath)) throw new Error(`media missing: ${meeting.media_path}`)
 
     ctx.setProgress(5)
@@ -147,7 +148,7 @@ export function createPipeline(events: QueueEvents): JobQueue {
     if (!meeting) throw new Error('meeting not found')
     if (meeting.has_screen !== 1 && meeting.has_camera !== 1) return 'skipped'
 
-    const mediaPath = path.join(app.getPath('userData'), meeting.media_path)
+    const mediaPath = resolveInside(app.getPath('userData'), meeting.media_path)
     if (!existsSync(mediaPath)) throw new Error(`media missing: ${meeting.media_path}`)
     const workDir = workDirFor(`${meeting.id}-frames`)
 

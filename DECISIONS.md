@@ -236,3 +236,29 @@ prebuilds lag, and the reference machine had no toolchain when Phase 2 started.
 the DB at the ABI level. `node:sqlite` is younger than better-sqlite3 — mitigated by the
 repository seam, plain-SQL schema, and the fact that the file format is just SQLite.
 Encryption-at-rest via SQLCipher (Phase 8) will need a different vehicle — noted there.
+
+---
+
+## ADR-012 — Encryption-at-rest deferred to post-1.0
+
+**Date:** 2026-08-26 · **Status:** accepted
+
+**Context.** The plan's Phase 8 includes optional AES-256-GCM for media plus SQLCipher for the
+database, keyed via safeStorage/DPAPI. Two facts changed the calculus: (1) ADR-011 chose
+node:sqlite, which has no SQLCipher path — database encryption would force reintroducing a
+native dependency; (2) the threat it addresses (another local user, offline disk access) is
+covered more completely by OS full-disk encryption, which PRIVACY.md already recommends.
+
+**Options.**
+1. Ship media-file encryption only (no DB) — protects the videos but leaves every transcript,
+   summary and OCR text readable, which is arguably the MORE sensitive content. A half-measure
+   that would market itself as more than it is.
+2. Swap back to a SQLCipher-capable driver — reopens the native-ABI liability ADR-011 closed.
+3. Defer the whole feature; keep the honest full-disk-encryption guidance.
+
+**Decision.** Option 3. PRIVACY.md already states plainly what encryption-at-rest would and
+would not protect against; BitLocker covers the same threat with fewer sharp edges.
+
+**Consequences.** The Settings toggle does not ship in v1.0. Revisit when either node:sqlite
+gains an encryption story or the sqlite driver decision is revisited for other reasons.
+Partial-protection theater was the alternative, and Principle 5 rules it out.

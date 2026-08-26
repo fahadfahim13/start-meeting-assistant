@@ -4,6 +4,7 @@ import path from 'node:path'
 import { Readable } from 'node:stream'
 import { pathToFileURL } from 'node:url'
 import { getDb } from './db'
+import { isInside } from './security/paths'
 
 /**
  * Hardened window factory. Every setting here is an invariant (CLAUDE.md,
@@ -50,7 +51,7 @@ export function hardenSession(): void {
       }
       const framesRoot = path.join(app.getPath('userData'), 'frames')
       const resolved = path.resolve(framesRoot, meetingId, file)
-      if (!resolved.startsWith(framesRoot + path.sep)) {
+      if (!isInside(framesRoot, resolved)) {
         return new Response('forbidden', { status: 403 })
       }
       return net.fetch(pathToFileURL(resolved).toString())
@@ -89,7 +90,7 @@ export function hardenSession(): void {
       if (!row) return new Response('not found', { status: 404 })
       const dataRoot = app.getPath('userData')
       const resolved = path.resolve(dataRoot, row.media_path)
-      if (!resolved.startsWith(dataRoot + path.sep)) return new Response('forbidden', { status: 403 })
+      if (!isInside(dataRoot, resolved)) return new Response('forbidden', { status: 403 })
 
       const size = statSync(resolved).size
       const rangeHeader = request.headers.get('Range')

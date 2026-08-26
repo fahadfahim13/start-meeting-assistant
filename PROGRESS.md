@@ -143,16 +143,20 @@ exactly the do-not-invent behavior the prompt demands.
 Player Range-handler verified by build + boot smoke; interactive seek behavior needs a manual
 dev-mode pass (listed in the manual test matrix).
 
-## Phase 8 — Security hardening and audit (2 d)
+## Phase 8 — Security hardening and audit (2 d) — ✅ CORE COMPLETE
 
 | Task | Status | Notes |
 |---|---|---|
-| CSP, navigation lockdown, permission handler, fuses | ⬜ | |
-| Path traversal guards | ⬜ | |
-| Binary + model integrity verification | ⬜ | |
-| Optional AES-256-GCM at rest (safeStorage/DPAPI) | ⬜ | |
-| Log redaction layer | ⬜ | |
-| IPC fuzz tests, CodeQL, audit, SBOM | ⬜ | |
+| CSP, navigation lockdown, permission handler | ✅ | landed Phase 1; re-audited. Fuses apply at package time (Phase 10) |
+| Path traversal guards | ✅ | centralized `resolveInside`/`isInside` + 10-case traversal battery (incl. the root-as-prefix sibling trap); wired into protocols and pipeline |
+| Binary integrity verification | ✅ | SHA-256 manifest of all 35 bundled binaries, verified at boot — fatal packaged, warning in dev. Models already size-verified (M-013) |
+| Encryption at rest | ⏸ | **deferred post-1.0 by ADR-012** — node:sqlite has no SQLCipher path, and media-only encryption would be half-measure theater; BitLocker guidance stands in PRIVACY.md |
+| Log redaction layer | ✅ | structured JSON logger: userData/home paths redacted at the WRITER, `content()` wrapper reduces meeting text to a length, 7-day retention |
+| IPC fuzz battery | ✅ | generated from the channel registry — 70 tests: hostile ids (traversal/SQL/UNC/oversize) rejected on every id field, payload shape + length bounds enforced |
+| Dependency audit | ✅ | **0 vulnerabilities** after vitest 4 upgrade (all 5 findings were dev-only vite-chain) |
+| Mechanical invariant audit | ✅ | grep-proven: zero `shell:true`, zero SQL interpolation, sandbox/contextIsolation/nodeIntegration intact, no renderer path crosses IPC |
+
+CodeQL + SBOM run in CI (configured Phase 0); first live run happens when the repo is pushed.
 
 ## Phase 9 — Accessibility, i18n, polish (2 d)
 
