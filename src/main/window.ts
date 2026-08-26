@@ -91,12 +91,15 @@ export function createMainWindow(): BrowserWindow {
   // E2E harness: MEETFROGE_AUTOREC=<seconds> makes the renderer record
   // unattended through the full production path (loopback → pipe → ffmpeg).
   const autorec = process.env['MEETFROGE_AUTOREC']
+  const autopause = process.env['MEETFROGE_AUTOPAUSE'] === '1' ? '1' : ''
+  const query: Record<string, string> = {}
+  if (autorec) query['autorec'] = autorec
+  if (autopause) query['autopause'] = autopause
   if (DEV_SERVER_URL) {
-    void win.loadURL(autorec ? `${DEV_SERVER_URL}?autorec=${autorec}` : DEV_SERVER_URL)
+    const qs = new URLSearchParams(query).toString()
+    void win.loadURL(qs ? `${DEV_SERVER_URL}?${qs}` : DEV_SERVER_URL)
   } else {
-    void win.loadFile(path.join(__dirname, '../renderer/index.html'), {
-      query: autorec ? { autorec } : {},
-    })
+    void win.loadFile(path.join(__dirname, '../renderer/index.html'), { query })
   }
 
   return win

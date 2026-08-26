@@ -29,6 +29,8 @@ interface AppState {
   select(patch: Partial<Selection>): void
   validate(): Promise<void>
   start(): Promise<void>
+  pause(): Promise<void>
+  resume(): Promise<void>
   stop(): Promise<void>
 }
 
@@ -155,6 +157,24 @@ export const useStore = create<AppState>((set, get) => {
         loopback?.stop()
         loopback = null
         set({ devicesError: String(e), previewsSuspended: false })
+      } finally {
+        set({ busy: false })
+      }
+    },
+
+    async pause() {
+      set({ busy: true })
+      try {
+        await api.invoke('session:pause', {})
+      } finally {
+        set({ busy: false })
+      }
+    },
+
+    async resume() {
+      set({ busy: true })
+      try {
+        await api.invoke('session:resume', {})
       } finally {
         set({ busy: false })
       }

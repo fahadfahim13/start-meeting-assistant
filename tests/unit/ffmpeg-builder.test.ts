@@ -26,7 +26,7 @@ describe('buildCaptureArgs', () => {
     const { args, encoder } = buildCaptureArgs({
       config: fullConfig,
       capabilities: caps(['h264_amf', 'libx264']),
-      outputPath: 'C:/out/x.mkv',
+      output: { kind: 'single' as const, path: 'C:/out/x.mkv' },
       pcmPipePath: '\\\\.\\pipe\\test',
     })
     expect(encoder).toBe('h264_amf')
@@ -41,7 +41,7 @@ describe('buildCaptureArgs', () => {
     const { args } = buildCaptureArgs({
       config: fullConfig,
       capabilities: caps(['libx264']),
-      outputPath: 'C:/out/x.mkv',
+      output: { kind: 'single' as const, path: 'C:/out/x.mkv' },
       pcmPipePath: '\\\\.\\pipe\\test',
     })
     const filter = args[args.indexOf('-filter_complex') + 1]!
@@ -52,7 +52,7 @@ describe('buildCaptureArgs', () => {
     const { args } = buildCaptureArgs({
       config: fullConfig,
       capabilities: caps(['h264_amf']),
-      outputPath: 'C:/out/x.mkv',
+      output: { kind: 'single' as const, path: 'C:/out/x.mkv' },
       pcmPipePath: '\\\\.\\pipe\\test',
     })
     const maps = args.filter((_, i) => args[i - 1] === '-map')
@@ -71,7 +71,7 @@ describe('buildCaptureArgs', () => {
         microphone: { dshowName: 'Evil "name" & $(whoami) | mic' },
       },
       capabilities: caps(['h264_amf']),
-      outputPath: 'C:/out/x.mkv',
+      output: { kind: 'single' as const, path: 'C:/out/x.mkv' },
       pcmPipePath: '\\\\.\\pipe\\test',
     })
     // The whole point of argv arrays: metacharacters stay inert data.
@@ -82,7 +82,7 @@ describe('buildCaptureArgs', () => {
     const { args, trackLayout } = buildCaptureArgs({
       config: { ...fullConfig, systemAudio: false },
       capabilities: caps(['h264_amf']),
-      outputPath: 'C:/out/x.mkv',
+      output: { kind: 'single' as const, path: 'C:/out/x.mkv' },
       pcmPipePath: null,
     })
     expect(trackLayout.system).toBe(false)
@@ -96,7 +96,7 @@ describe('buildCaptureArgs', () => {
         screen: { sourceId: 'window:1:0', kind: 'window', displayIndex: null, windowTitle: 'My Window' },
       },
       capabilities: caps(['h264_amf']),
-      outputPath: 'C:/out/x.mkv',
+      output: { kind: 'single' as const, path: 'C:/out/x.mkv' },
       pcmPipePath: '\\\\.\\pipe\\test',
     })
     expect(args).toContain('gdigrab')

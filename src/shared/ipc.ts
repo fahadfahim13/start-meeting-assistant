@@ -36,6 +36,14 @@ export const INVOKE_CHANNELS = {
     request: CaptureConfigSchema,
     response: z.object({ meetingId: z.string() }),
   },
+  'session:pause': {
+    request: z.object({}),
+    response: SessionStatusSchema,
+  },
+  'session:resume': {
+    request: z.object({}),
+    response: SessionStatusSchema,
+  },
   'session:stop': {
     request: z.object({}),
     response: SessionStatusSchema,

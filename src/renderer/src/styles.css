@@ -208,3 +208,10 @@ button.stop {
   color: var(--red);
   font-weight: 600;
 }
+
+.rec-indicator.paused {
+  color: var(--amber);
+  animation: none;
+}
+.state-paused { color: var(--amber); }
+.state-finalizing { color: var(--accent); }

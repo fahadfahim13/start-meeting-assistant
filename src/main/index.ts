@@ -6,6 +6,9 @@ import { handle } from './ipc/gateway'
 import { enumerateDevices } from './capture/devices'
 import { probeCapabilities } from './platform/capability-probe'
 import { SessionManager } from './capture/session'
+import { recoverInterrupted, type RecoveryReport } from './capture/recovery'
+import { getDb, closeDb } from './db'
+import { initTray, updateTray, destroyTray } from './tray'
 
 // A second launch focuses the existing window instead of racing on state.
 if (!app.requestSingleInstanceLock()) {
@@ -20,6 +23,7 @@ function bootstrap(): void {
   const sessions = new SessionManager({
     onStatus(status) {
       mainWindow?.webContents.send('session:state', status)
+      updateTray(status)
     },
     onStopped(outputPath) {
       if (process.env['MEETFROGE_AUTOREC']) void verifyAndExit(outputPath)
@@ -31,6 +35,8 @@ function bootstrap(): void {
   handle('devices:probeCapabilities', ({ force }) => probeCapabilities(force))
   handle('session:validate', (config) => sessions.validate(config))
   handle('session:start', async (config) => ({ meetingId: await sessions.start(config) }))
+  handle('session:pause', () => sessions.pause())
+  handle('session:resume', () => sessions.resume())
   handle('session:stop', () => sessions.stop())
   handle('session:status', async () => sessions.status())
 
@@ -48,9 +54,21 @@ function bootstrap(): void {
     }
   })
 
-  app.whenReady().then(() => {
+  let recoveryReports: RecoveryReport[] = []
+
+  app.whenReady().then(async () => {
     hardenSession()
+
+    // DB up + crash recovery BEFORE anything can start a new session.
+    try {
+      getDb()
+      recoveryReports = await recoverInterrupted()
+    } catch (e) {
+      console.error('[db] startup failed:', e)
+    }
+
     mainWindow = createMainWindow()
+    initTray(mainWindow)
 
     // Probe in the background after first paint; results are cached.
     void probeCapabilities().then((caps) => {
@@ -68,7 +86,11 @@ function bootstrap(): void {
   })
 
   app.on('window-all-closed', () => {
-    void sessions.dispose().then(() => app.quit())
+    void sessions.dispose().then(() => {
+      destroyTray()
+      closeDb()
+      app.quit()
+    })
   })
 
   app.on('before-quit', () => {
@@ -149,6 +171,7 @@ function bootstrap(): void {
       result['capabilities'] = caps
       const devices = await enumerateDevices({ webrtcCameras: [], webrtcMicrophones: [] })
       result['screens'] = devices.screens.map((s) => ({ id: s.id, kind: s.kind, name: s.name.slice(0, 40) }))
+      result['recovery'] = recoveryReports
       result['ok'] = caps.workingEncoders.length > 0
     } catch (e) {
       result['ok'] = false

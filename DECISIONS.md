@@ -191,3 +191,48 @@ dependencies are compatible (MIT / Apache-2.0). Gemma models are avoided despite
 because their custom license carries use restrictions unsuited to a fully-open project.
 Qwen3 (Apache-2.0), SmolVLM2 (Apache-2.0), Moondream2 (Apache-2.0) and Whisper (MIT) are all fine.
 Permissive downstream reuse is forgone — not a stated requirement.
+
+---
+
+## ADR-010 — PCM over a named pipe; stdin reserved for control
+
+**Date:** 2026-08-25 · **Status:** accepted
+
+**Context.** Spike 2 proved loopback PCM over ffmpeg stdin (B-006), but that shape leaves no
+channel for ffmpeg's `q` command — its only graceful-shutdown mechanism — and a killed ffmpeg
+does not write the MKV trailer.
+
+**Options.**
+1. PCM on stdin, stop via kill — corrupts the trailer; unacceptable under Principle 2.
+2. PCM over localhost TCP — works, but any local process could race ffmpeg to the port.
+3. PCM over a Windows named pipe (`\.\pipe\meetfroge-pcm-<random>`), stdin for `q`.
+
+**Decision.** Option 3. Named-pipe default DACL is current-user; the name is random per
+session; exactly one client is accepted.
+
+**Consequences.** Stop is graceful and the trailer is always written. The bridge keeps the
+ring/backpressure design B-006 validated. Residual: a same-user process could connect first —
+same trust boundary as the rest of the app (see SECURITY.md "what this does not protect against").
+
+---
+
+## ADR-011 — node:sqlite instead of better-sqlite3
+
+**Date:** 2026-08-26 · **Status:** accepted
+
+**Context.** The plan specified better-sqlite3 — a native addon that needs either prebuilt
+binaries for the exact Electron ABI or a local MSVC toolchain. Electron 44 is new enough that
+prebuilds lag, and the reference machine had no toolchain when Phase 2 started.
+
+**Options.**
+1. better-sqlite3 — battle-tested, but a native-ABI liability on every Electron upgrade.
+2. Wait for the toolchain — blocks Phase 2 on an unrelated install.
+3. Node's built-in `node:sqlite` (DatabaseSync) — verified inside Electron 44 on 2026-08-26:
+   SQLite 3.53.1, **FTS5 works**, synchronous API, zero compilation.
+
+**Decision.** Option 3, behind a repository layer so a later swap stays cheap.
+
+**Consequences.** No native compilation anywhere in the app; Electron upgrades cannot break
+the DB at the ABI level. `node:sqlite` is younger than better-sqlite3 — mitigated by the
+repository seam, plain-SQL schema, and the fact that the file format is just SQLite.
+Encryption-at-rest via SQLCipher (Phase 8) will need a different vehicle — noted there.

@@ -29,7 +29,7 @@ Blocked and deferred rows **must** carry a reason.
 | 0b · Spike 2 — PCM → ffmpeg stdin pipe | ✅ | **PASS, 8/8.** 5 min sustained: 0 ring drops, completeness 1.0000, h264_amf hardware encode, mic↔system drift **3 ms and non-accumulating**. B-006 |
 | 0b · Spike 3 — whisper.cpp CPU baseline (B-007) | 🟡 | harness + official CPU binary ready; model downloading |
 | 0b · Spike 3 — whisper.cpp Vulkan (B-008) | 🔴 | **blocked: needs toolchain install (user must run `scripts/install-build-toolchain.ps1` elevated)** — no official Windows Vulkan binary exists |
-| 0b · Spike 4 — llama.cpp Vulkan benchmark | 🟡 | official Vulkan binary verified: `Vulkan0: AMD Radeon(TM) Graphics (12191 MiB)` — native driver, 12 GB GTT. Model downloading |
+| 0b · Spike 4 — llama.cpp Vulkan benchmark | ✅ | **B-009/B-010 measured.** CPU 51.9/6.96, Vulkan 56.3/9.68 t/s. 1-h summary projection: 7.7 min CPU, 6.3 min Vulkan — **both within the 10-min budget** |
 
 **Exit criteria.** Repo committed with all tracking files. All four spikes produce measured
 numbers in `docs/benchmarks.md`. **Spike 1 must prove non-silent system audio.** Any failure is

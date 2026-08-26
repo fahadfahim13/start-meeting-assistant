@@ -1,7 +1,7 @@
 import { app } from 'electron'
 import { spawn, type ChildProcessByStdio } from 'node:child_process'
 import type { Readable, Writable } from 'node:stream'
-import { mkdirSync, statSync } from 'node:fs'
+import { mkdirSync, statSync, readdirSync, rmSync, existsSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import type { CaptureConfig, SessionStatus, ValidationResult } from '@shared/schemas/capture'
@@ -9,38 +9,63 @@ import { QUALITY_PROFILES } from '@shared/schemas/capture'
 import { AppError } from '@shared/errors'
 import { probeCapabilities } from '@main/platform/capability-probe'
 import { resolveBinary } from '@main/platform/binaries'
+import * as meetings from '@main/db/repositories/meetings'
 import { buildCaptureArgs } from './ffmpeg-builder'
 import { LoopbackBridge } from './loopback-bridge'
+import { concatSegments, diskFreeBytes, isPlayable, probeDurationS } from './media-tools'
 
 /**
- * Recording session lifecycle. Phase 1 scope: validate → start → stop, one
- * session at a time, single-file output. Segmentation, pause/resume and crash
- * recovery land in Phase 2 on top of this.
+ * Recording session lifecycle (Phase 2 shape).
  *
- * Principle 2: the recording is sacred. ffmpeg is stopped with the 'q' command
- * on stdin (graceful — MKV trailer is written), never a kill, except as a
- * last-resort timeout.
+ * Segmented output: each meeting records into its own directory as 5-minute,
+ * independently playable segments — a crash costs at most one segment.
+ * Pause is segment-based (ffmpeg has no native pause): the current process is
+ * stopped gracefully with 'q', and resume spawns a new process continuing the
+ * segment numbering. Stop concatenates everything losslessly into one MKV.
+ *
+ * Principle 2 throughout: 'q' first, kill only on a 10 s timeout; segment
+ * files are only deleted after the concatenated file verifiably exists.
  */
 
-const STORAGE_FLOOR_BYTES = 5 * 1024 ** 3 // hard floor: refuse to start below this
+const STORAGE_FLOOR_BYTES = 5 * 1024 ** 3
 const STOP_GRACE_MS = 10_000
+// Test hook: MEETFROGE_SEGTIME shrinks segments so crash tests do not need to
+// run for 5 minutes to produce multiple segments. Clamped, defaults to 300.
+const SEGMENT_TIME_S = Math.min(3600, Math.max(5, parseInt(process.env['MEETFROGE_SEGTIME'] ?? '300', 10) || 300))
+const DISK_GUARD_INTERVAL_MS = 10_000
 
 export interface SessionEvents {
   onStatus(status: SessionStatus): void
-  /** Fires after a clean stop with the finalized file. */
+  /** Fires after a clean stop with the finalized, concatenated file. */
   onStopped?(outputPath: string, meetingId: string): void
+}
+
+type Phase = 'recording' | 'paused' | 'finalizing'
+
+interface RunProcess {
+  ffmpeg: ChildProcessByStdio<Writable, null, Readable>
+  bridge: LoopbackBridge | null
+  stderrTail: string[]
 }
 
 interface ActiveSession {
   meetingId: string
   config: CaptureConfig
-  outputPath: string
-  ffmpeg: ChildProcessByStdio<Writable, null, Readable>
-  bridge: LoopbackBridge | null
+  segmentDir: string
+  finalPath: string
+  phase: Phase
+  run: RunProcess | null
+  nextSegmentNumber: number
+  currentSegmentDbId: string | null
   startedAt: number
+  /** Recording time accumulated across completed runs (excludes pauses). */
+  accumulatedMs: number
+  runStartedAt: number | null
   encoder: string
-  stderrTail: string[]
+  totalPcmDrops: number
+  totalPcmBackpressure: number
   statusTimer: ReturnType<typeof setInterval>
+  diskTimer: ReturnType<typeof setInterval>
 }
 
 export class SessionManager {
@@ -54,6 +79,8 @@ export class SessionManager {
     mkdirSync(dir, { recursive: true })
     return dir
   }
+
+  // ---- validation ---------------------------------------------------------
 
   async validate(config: CaptureConfig): Promise<ValidationResult> {
     const warnings: string[] = []
@@ -74,90 +101,207 @@ export class SessionManager {
     const audioK = profile.audioBitrateK * ((config.microphone ? 1 : 0) + (config.systemAudio ? 1 : 0))
     const estimatedBytesPerHour = Math.round(((videoK + audioK) * 1000 * 3600) / 8)
 
-    let diskFreeBytes = 0
+    let free = 0
     try {
-      const { bavail, bsize } = await import('node:fs/promises').then((fs) => fs.statfs(this.recordingsDir()))
-      diskFreeBytes = Number(bavail) * Number(bsize)
+      free = await diskFreeBytes(this.recordingsDir())
     } catch {
       warnings.push('Could not determine free disk space.')
     }
-    if (diskFreeBytes > 0 && diskFreeBytes < STORAGE_FLOOR_BYTES) {
+    if (free > 0 && free < STORAGE_FLOOR_BYTES) {
       errors.push(`Less than ${Math.round(STORAGE_FLOOR_BYTES / 1024 ** 3)} GB free — free up space before recording.`)
     }
 
-    return { ok: errors.length === 0, warnings, errors, estimatedBytesPerHour, diskFreeBytes }
+    return { ok: errors.length === 0, warnings, errors, estimatedBytesPerHour, diskFreeBytes: free }
   }
+
+  // ---- lifecycle ----------------------------------------------------------
 
   async start(config: CaptureConfig): Promise<string> {
     if (this.active) throw new AppError('CAPTURE_ALREADY_ACTIVE')
     const validation = await this.validate(config)
-    if (!validation.ok) {
-      throw new AppError('CAPTURE_FFMPEG_SPAWN', validation.errors.join(' '))
-    }
+    if (!validation.ok) throw new AppError('CAPTURE_FFMPEG_SPAWN', validation.errors.join(' '))
 
     const meetingId = randomUUID()
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
-    const outputPath = path.join(this.recordingsDir(), `${stamp}_${meetingId.slice(0, 8)}.mkv`)
+    const baseName = `${stamp}_${meetingId.slice(0, 8)}`
+    const segmentDir = path.join(this.recordingsDir(), baseName)
+    mkdirSync(segmentDir, { recursive: true })
 
     const caps = await probeCapabilities()
-    let bridge: LoopbackBridge | null = null
-    if (config.systemAudio) {
-      bridge = new LoopbackBridge()
-      await bridge.listen()
-    }
+    const encoder = caps.workingEncoders[0] ?? 'none'
 
-    const built = buildCaptureArgs({
-      config,
-      capabilities: caps,
-      outputPath,
-      pcmPipePath: bridge?.pipePath ?? null,
-    })
-
-    console.log('[session] ffmpeg', built.args.map((a) => (a.includes(app.getPath('userData')) ? '<out>' : a)).join(' '))
-
-    const ffmpeg = spawn(resolveBinary('ffmpeg'), built.args, {
-      // argv array + no shell — invariant (SECURITY.md T5).
-      shell: false,
-      windowsHide: true,
-      stdio: ['pipe', 'ignore', 'pipe'],
+    meetings.createMeeting({
+      id: meetingId,
+      title: config.title,
+      mediaPath: path.join('recordings', baseName), // relative; becomes the file on finalize
+      captureProfile: { preset: config.preset, encoder, segmentTimeS: SEGMENT_TIME_S },
+      hasScreen: config.screen !== null,
+      hasCamera: config.camera !== null,
+      hasMic: config.microphone !== null,
+      hasSystemAudio: config.systemAudio,
     })
 
     const session: ActiveSession = {
       meetingId,
       config,
-      outputPath,
-      ffmpeg,
-      bridge,
+      segmentDir,
+      finalPath: path.join(this.recordingsDir(), `${baseName}.mkv`),
+      phase: 'recording',
+      run: null,
+      nextSegmentNumber: 0,
+      currentSegmentDbId: null,
       startedAt: Date.now(),
-      encoder: built.encoder,
-      stderrTail: [],
+      accumulatedMs: 0,
+      runStartedAt: null,
+      encoder,
+      totalPcmDrops: 0,
+      totalPcmBackpressure: 0,
       statusTimer: setInterval(() => this.events.onStatus(this.status()), 1000),
+      diskTimer: setInterval(() => void this.diskGuard(), DISK_GUARD_INTERVAL_MS),
     }
     this.active = session
     this.lastError = null
 
-    ffmpeg.stderr.on('data', (d: Buffer) => {
-      const lines = d.toString().split(/\r?\n/).filter((l) => l.trim())
-      session.stderrTail.push(...lines)
-      if (session.stderrTail.length > 60) session.stderrTail.splice(0, session.stderrTail.length - 60)
-    })
-
-    ffmpeg.on('error', (e) => this.fail(`ffmpeg spawn error: ${e.message}`))
-    ffmpeg.on('exit', (code) => {
-      if (this.active === session && code !== 0 && code !== null) {
-        // Unexpected mid-recording exit. The file up to this point is still on
-        // disk; surface the last stderr lines as the diagnosis.
-        this.fail(`ffmpeg exited ${code}: ${session.stderrTail.slice(-5).join(' | ')}`)
-      }
-    })
+    try {
+      await this.spawnRun(session)
+    } catch (e) {
+      this.fail(String(e))
+      throw e
+    }
 
     this.events.onStatus(this.status())
     return meetingId
   }
 
-  /** Renderer PCM frames land here via the gateway. */
-  pushPcm(frame: Buffer): void {
-    this.active?.bridge?.push(frame)
+  private async spawnRun(session: ActiveSession): Promise<void> {
+    const caps = await probeCapabilities()
+
+    let bridge: LoopbackBridge | null = null
+    if (session.config.systemAudio) {
+      bridge = new LoopbackBridge()
+      await bridge.listen()
+    }
+
+    const built = buildCaptureArgs({
+      config: session.config,
+      capabilities: caps,
+      output: {
+        kind: 'segments',
+        pattern: path.join(session.segmentDir, 'seg_%03d.mkv'),
+        startNumber: session.nextSegmentNumber,
+        segmentTimeS: SEGMENT_TIME_S,
+      },
+      pcmPipePath: bridge?.pipePath ?? null,
+    })
+    session.encoder = built.encoder
+
+    const ffmpeg = spawn(resolveBinary('ffmpeg'), built.args, {
+      shell: false, // invariant — argv arrays only (SECURITY.md T5)
+      windowsHide: true,
+      stdio: ['pipe', 'ignore', 'pipe'],
+    })
+
+    const run: RunProcess = { ffmpeg, bridge, stderrTail: [] }
+    session.run = run
+    session.runStartedAt = Date.now()
+
+    ffmpeg.stderr.on('data', (d: Buffer) => {
+      const text = d.toString()
+      for (const line of text.split(/\r?\n/)) {
+        if (!line.trim()) continue
+        run.stderrTail.push(line)
+        if (run.stderrTail.length > 60) run.stderrTail.shift()
+        // The segment muxer announces each new file — that is our segment ledger.
+        const m = /Opening '(.+?seg_(\d+)\.mkv)' for writing/.exec(line)
+        if (m) this.onSegmentOpened(session, m[1]!, parseInt(m[2]!, 10))
+      }
+    })
+
+    ffmpeg.on('error', (e) => this.fail(`ffmpeg spawn error: ${e.message}`))
+    ffmpeg.on('exit', (code) => {
+      if (this.active === session && session.run === run && session.phase === 'recording' && code !== 0 && code !== null) {
+        this.fail(`ffmpeg exited ${code}: ${run.stderrTail.slice(-5).join(' | ')}`)
+      }
+    })
+  }
+
+  private onSegmentOpened(session: ActiveSession, absPath: string, seq: number): void {
+    // Finalize the previous segment row now that the muxer moved on.
+    this.finalizeCurrentSegment(session)
+    session.currentSegmentDbId = meetings.addSegment({
+      meetingId: session.meetingId,
+      seq,
+      path: path.relative(app.getPath('userData'), absPath),
+      startedAt: Date.now(),
+    })
+    session.nextSegmentNumber = seq + 1
+  }
+
+  private finalizeCurrentSegment(session: ActiveSession): void {
+    if (!session.currentSegmentDbId) return
+    const rows = meetings.segmentsFor(session.meetingId)
+    const row = rows.find((r) => r.id === session.currentSegmentDbId)
+    if (row) {
+      const abs = path.join(app.getPath('userData'), row.path)
+      let bytes = 0
+      try {
+        bytes = statSync(abs).size
+      } catch {
+        /* not yet flushed */
+      }
+      meetings.finalizeSegment(row.id, bytes, null)
+    }
+    session.currentSegmentDbId = null
+  }
+
+  /** Gracefully end the current ffmpeg run ('q' → trailer written). */
+  private async endRun(session: ActiveSession): Promise<void> {
+    const run = session.run
+    if (!run) return
+    run.bridge?.end()
+    const stats = run.bridge?.getStats()
+    if (stats) {
+      session.totalPcmDrops += stats.drops
+      session.totalPcmBackpressure += stats.backpressure
+    }
+
+    const exited = new Promise<number | null>((resolve) => run.ffmpeg.once('exit', resolve))
+    try {
+      run.ffmpeg.stdin.write('q\n')
+    } catch {
+      /* already dead */
+    }
+    const code = await Promise.race([exited, new Promise<null>((r) => setTimeout(() => r(null), STOP_GRACE_MS))])
+    if (code === null && run.ffmpeg.exitCode === null) {
+      console.warn('[session] ffmpeg ignored q — killing (last resort)')
+      run.ffmpeg.kill()
+      await exited
+    }
+    run.bridge?.destroy()
+    this.finalizeCurrentSegment(session)
+    if (session.runStartedAt) session.accumulatedMs += Date.now() - session.runStartedAt
+    session.runStartedAt = null
+    session.run = null
+  }
+
+  async pause(): Promise<SessionStatus> {
+    const session = this.active
+    if (!session || session.phase !== 'recording') throw new AppError('CAPTURE_NOT_ACTIVE')
+    session.phase = 'paused'
+    await this.endRun(session)
+    meetings.setMeetingState(session.meetingId, 'paused')
+    this.events.onStatus(this.status())
+    return this.status()
+  }
+
+  async resume(): Promise<SessionStatus> {
+    const session = this.active
+    if (!session || session.phase !== 'paused') throw new AppError('CAPTURE_NOT_ACTIVE', 'no paused session')
+    session.phase = 'recording'
+    await this.spawnRun(session)
+    meetings.setMeetingState(session.meetingId, 'recording')
+    this.events.onStatus(this.status())
+    return this.status()
   }
 
   async stop(): Promise<SessionStatus> {
@@ -165,34 +309,100 @@ export class SessionManager {
     if (!session) throw new AppError('CAPTURE_NOT_ACTIVE')
 
     clearInterval(session.statusTimer)
+    clearInterval(session.diskTimer)
+    session.phase = 'finalizing'
+    meetings.setMeetingState(session.meetingId, 'finalizing')
+    this.events.onStatus(this.status())
 
-    // 1. EOF the PCM stream so ffmpeg's pipe input ends cleanly.
-    session.bridge?.end()
+    await this.endRun(session)
 
-    // 2. Graceful stop: 'q' on stdin → ffmpeg finalizes the MKV trailer.
-    const exited = new Promise<number | null>((resolve) => session.ffmpeg.once('exit', resolve))
     try {
-      session.ffmpeg.stdin.write('q\n')
-    } catch {
-      /* stdin may already be closed if ffmpeg died */
+      const segFiles = readdirSync(session.segmentDir)
+        .filter((f) => /^seg_\d+\.mkv$/.test(f))
+        .sort()
+        .map((f) => path.join(session.segmentDir, f))
+      if (segFiles.length === 0) throw new Error('no segments were written')
+
+      await concatSegments(segFiles, session.finalPath)
+      const durationS = await probeDurationS(session.finalPath)
+      if (durationS === null) throw new Error('concatenated file is not playable')
+
+      meetings.finalizeMeeting(
+        session.meetingId,
+        path.relative(app.getPath('userData'), session.finalPath),
+        statSync(session.finalPath).size,
+        Math.round(durationS * 1000),
+      )
+      // Only after the final file verifiably exists do the segments go.
+      rmSync(session.segmentDir, { recursive: true, force: true })
+    } catch (e) {
+      // Segments stay on disk; recovery can pick them up.
+      meetings.setMeetingState(session.meetingId, 'failed')
+      this.fail(`finalize failed: ${String(e)} — segments kept in ${path.basename(session.segmentDir)}`)
+      return this.status()
     }
 
-    const code = await Promise.race([
-      exited,
-      new Promise<null>((r) => setTimeout(() => r(null), STOP_GRACE_MS)),
-    ])
-    if (code === null && session.ffmpeg.exitCode === null) {
-      console.warn('[session] ffmpeg ignored q for 10s — killing (last resort)')
-      session.ffmpeg.kill()
-      await exited
-    }
-
-    session.bridge?.destroy()
     const status = this.status()
     this.active = null
     this.events.onStatus(this.status())
-    this.events.onStopped?.(session.outputPath, session.meetingId)
+    this.events.onStopped?.(session.finalPath, session.meetingId)
     return { ...status, state: 'idle' }
+  }
+
+  // ---- guards & plumbing --------------------------------------------------
+
+  private async diskGuard(): Promise<void> {
+    const session = this.active
+    if (!session || session.phase !== 'recording') return
+    try {
+      const free = await diskFreeBytes(this.recordingsDir())
+      if (free < STORAGE_FLOOR_BYTES) {
+        console.warn('[session] disk floor reached — auto-stopping to protect the recording')
+        this.lastError = 'Recording stopped automatically: disk space fell below the safety floor.'
+        await this.stop()
+      }
+    } catch {
+      /* transient statfs failure — next tick */
+    }
+  }
+
+  pushPcm(frame: Buffer): void {
+    this.active?.run?.bridge?.push(frame)
+  }
+
+  status(): SessionStatus {
+    const s = this.active
+    let bytesWritten = 0
+    if (s) {
+      try {
+        for (const f of readdirSync(s.segmentDir)) {
+          bytesWritten += statSync(path.join(s.segmentDir, f)).size
+        }
+      } catch {
+        /* dir may already be cleaned up */
+      }
+      if (existsSync(s.finalPath)) {
+        try {
+          bytesWritten = statSync(s.finalPath).size
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    const runStats = s?.run?.bridge?.getStats()
+    const elapsedMs = s
+      ? s.accumulatedMs + (s.runStartedAt ? Date.now() - s.runStartedAt : 0)
+      : 0
+    return {
+      state: s ? (s.phase === 'finalizing' ? 'finalizing' : s.phase) : this.lastError ? 'failed' : 'idle',
+      meetingId: s?.meetingId ?? null,
+      elapsedMs,
+      bytesWritten,
+      pcmDrops: (s?.totalPcmDrops ?? 0) + (runStats?.drops ?? 0),
+      pcmBackpressure: (s?.totalPcmBackpressure ?? 0) + (runStats?.backpressure ?? 0),
+      encoderInUse: s?.encoder ?? null,
+      error: this.lastError,
+    }
   }
 
   private fail(message: string): void {
@@ -201,42 +411,24 @@ export class SessionManager {
     const session = this.active
     if (session) {
       clearInterval(session.statusTimer)
-      session.bridge?.destroy()
+      clearInterval(session.diskTimer)
+      session.run?.bridge?.destroy()
+      try {
+        meetings.setMeetingState(session.meetingId, 'failed')
+      } catch {
+        /* db may be unavailable */
+      }
       this.active = null
     }
     this.events.onStatus(this.status())
   }
 
-  status(): SessionStatus {
-    const s = this.active
-    let bytesWritten = 0
-    if (s) {
-      try {
-        bytesWritten = statSync(s.outputPath).size
-      } catch {
-        /* file not created yet in the first moments */
-      }
-    }
-    const bridgeStats = s?.bridge?.getStats()
-    return {
-      state: s ? 'recording' : this.lastError ? 'failed' : 'idle',
-      meetingId: s?.meetingId ?? null,
-      elapsedMs: s ? Date.now() - s.startedAt : 0,
-      bytesWritten,
-      pcmDrops: bridgeStats?.drops ?? 0,
-      pcmBackpressure: bridgeStats?.backpressure ?? 0,
-      encoderInUse: s?.encoder ?? null,
-      error: this.lastError,
-    }
-  }
-
-  /** App-quit safety: never leave an orphaned ffmpeg. */
   async dispose(): Promise<void> {
     if (this.active) {
       try {
         await this.stop()
       } catch {
-        this.active?.ffmpeg.kill()
+        this.active?.run?.ffmpeg.kill()
       }
     }
   }

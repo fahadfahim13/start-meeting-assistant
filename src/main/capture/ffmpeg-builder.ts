@@ -23,8 +23,15 @@ import { AppError } from '@shared/errors'
 export interface BuildInput {
   config: CaptureConfig
   capabilities: Capabilities
-  /** Absolute output path — resolved by main, never renderer-supplied. */
-  outputPath: string
+  /**
+   * Where the encoded output goes — resolved by main, never renderer-supplied.
+   * `single`: one file (spikes, tests). `segments`: crash-safe chunked output —
+   * each segment is independently playable (`reset_timestamps 1`, so the concat
+   * demuxer can stack them without double-offsetting).
+   */
+  output:
+    | { kind: 'single'; path: string }
+    | { kind: 'segments'; pattern: string; startNumber: number; segmentTimeS: number }
   /** Named pipe path carrying s16le 48k stereo PCM; null when systemAudio is off. */
   pcmPipePath: string | null
 }
@@ -74,7 +81,7 @@ export function pickEncoder(caps: Capabilities): EncoderId {
 }
 
 export function buildCaptureArgs(input: BuildInput): BuiltCommand {
-  const { config, capabilities, outputPath, pcmPipePath } = input
+  const { config, capabilities, output, pcmPipePath } = input
   const profile: QualityProfile = QUALITY_PROFILES[config.preset]
   const encoder = pickEncoder(capabilities)
 
@@ -205,7 +212,18 @@ export function buildCaptureArgs(input: BuildInput): BuiltCommand {
   if (micInput >= 0) args.push(`-metadata:s:a:${a++}`, 'title=Microphone')
   if (systemInput >= 0) args.push(`-metadata:s:a:${a}`, 'title=System Audio')
 
-  args.push(outputPath)
+  if (output.kind === 'single') {
+    args.push(output.path)
+  } else {
+    args.push(
+      '-f', 'segment',
+      '-segment_format', 'matroska',
+      '-segment_time', String(output.segmentTimeS),
+      '-reset_timestamps', '1',
+      '-segment_start_number', String(output.startNumber),
+      output.pattern,
+    )
+  }
 
   return { args, encoder, trackLayout: layout }
 }

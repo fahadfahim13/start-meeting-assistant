@@ -44,19 +44,21 @@ export default function App(): React.JSX.Element {
     const autorec = new URLSearchParams(window.location.search).get('autorec')
     if (!autorec || !s.inventory) return
     const seconds = Math.min(600, Math.max(3, parseInt(autorec, 10) || 10))
-    let stopped = false
-    const t1 = setTimeout(() => void useStore.getState().start(), 1500)
-    const t2 = setTimeout(() => {
-      stopped = true
-      void useStore.getState().stop()
-    }, 1500 + seconds * 1000)
-    return () => {
-      clearTimeout(t1)
-      if (!stopped) clearTimeout(t2)
+    const autopause = new URLSearchParams(window.location.search).get('autopause') === '1'
+    const timers: ReturnType<typeof setTimeout>[] = []
+    timers.push(setTimeout(() => void useStore.getState().start(), 1500))
+    if (autopause) {
+      // pause at 40%, resume at 60% — exercises the segment-based pause path
+      timers.push(setTimeout(() => void useStore.getState().pause(), 1500 + seconds * 400))
+      timers.push(setTimeout(() => void useStore.getState().resume(), 1500 + seconds * 600))
     }
+    timers.push(setTimeout(() => void useStore.getState().stop(), 1500 + seconds * 1000))
+    return () => timers.forEach(clearTimeout)
   }, [s.inventory === null])
 
   const recording = s.session?.state === 'recording'
+  const paused = s.session?.state === 'paused'
+  const inSession = recording || paused || s.session?.state === 'finalizing'
 
   // Camera preview — WebRTC, entirely separate from the ffmpeg path, and torn
   // down the moment recording starts: cameras are EXCLUSIVE devices, and a
@@ -111,9 +113,9 @@ export default function App(): React.JSX.Element {
     <div className="app">
       <header className="titlebar">
         <h1>MeetFroge</h1>
-        {recording && (
-          <span className="rec-indicator" aria-live="assertive">
-            ● REC {fmtElapsed(s.session?.elapsedMs ?? 0)}
+        {inSession && (
+          <span className={paused ? 'rec-indicator paused' : 'rec-indicator'} aria-live="assertive">
+            {paused ? '⏸ PAUSED' : '● REC'} {fmtElapsed(s.session?.elapsedMs ?? 0)}
           </span>
         )}
       </header>
@@ -129,7 +131,7 @@ export default function App(): React.JSX.Element {
               value={s.selection.title}
               placeholder="Weekly sync"
               maxLength={200}
-              disabled={recording}
+              disabled={inSession}
               onChange={(e) => s.select({ title: e.target.value })}
             />
           </label>
@@ -138,7 +140,7 @@ export default function App(): React.JSX.Element {
             Screen / window
             <select
               value={s.selection.screenId ?? ''}
-              disabled={recording}
+              disabled={inSession}
               onChange={(e) => s.select({ screenId: e.target.value || null })}
             >
               <option value="">None</option>
@@ -154,7 +156,7 @@ export default function App(): React.JSX.Element {
             Camera
             <select
               value={s.selection.cameraDeviceId ?? ''}
-              disabled={recording}
+              disabled={inSession}
               onChange={(e) => s.select({ cameraDeviceId: e.target.value || null })}
             >
               <option value="">None</option>
@@ -172,7 +174,7 @@ export default function App(): React.JSX.Element {
             Microphone
             <select
               value={s.selection.microphoneDeviceId ?? ''}
-              disabled={recording}
+              disabled={inSession}
               onChange={(e) => s.select({ microphoneDeviceId: e.target.value || null })}
             >
               <option value="">None</option>
@@ -189,7 +191,7 @@ export default function App(): React.JSX.Element {
             <input
               type="checkbox"
               checked={s.selection.systemAudio}
-              disabled={recording}
+              disabled={inSession}
               onChange={(e) => s.select({ systemAudio: e.target.checked })}
             />
             Capture system audio (what you hear)
@@ -199,7 +201,7 @@ export default function App(): React.JSX.Element {
             Quality
             <select
               value={s.selection.preset}
-              disabled={recording}
+              disabled={inSession}
               onChange={(e) => s.select({ preset: e.target.value as typeof s.selection.preset })}
             >
               <option value="efficient">Efficient — 720p10, smallest files</option>
@@ -209,7 +211,7 @@ export default function App(): React.JSX.Element {
             </select>
           </label>
 
-          <button className="ghost" disabled={recording} onClick={() => void s.refreshDevices()}>
+          <button className="ghost" disabled={inSession} onClick={() => void s.refreshDevices()}>
             Refresh devices
           </button>
         </section>
@@ -269,14 +271,26 @@ export default function App(): React.JSX.Element {
           <button className="ghost" disabled={recording || s.busy} onClick={() => void s.validate()}>
             Check setup
           </button>
-          {!recording ? (
+          {!inSession ? (
             <button className="record" disabled={s.busy || !inv} onClick={() => void s.start()}>
               ● Record
             </button>
           ) : (
-            <button className="stop" disabled={s.busy} onClick={() => void s.stop()}>
-              ■ Stop
-            </button>
+            <>
+              {recording && (
+                <button className="ghost" disabled={s.busy} onClick={() => void s.pause()}>
+                  ⏸ Pause
+                </button>
+              )}
+              {paused && (
+                <button className="record" disabled={s.busy} onClick={() => void s.resume()}>
+                  ▶ Resume
+                </button>
+              )}
+              <button className="stop" disabled={s.busy} onClick={() => void s.stop()}>
+                ■ Stop
+              </button>
+            </>
           )}
         </div>
       </footer>

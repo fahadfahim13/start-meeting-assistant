@@ -250,6 +250,44 @@ failed Vulkan build masquerade as a Vulkan result — the exact failure mode the
 
 ---
 
+### B-009 / B-010 — llama.cpp summarizer, CPU vs Vulkan ✅ measured
+
+**Date:** 2026-08-26 · **Spike:** 4 · **Binary:** official `llama-b10622-bin-win-vulkan-x64`
+(SAME binary both runs — only `-ngl` differs, isolating the offload variable)
+
+| Config | Prompt (2048 tok) | Generation (128 tok) |
+|---|---|---|
+| CPU (`-ngl 0`, 10 threads) | 51.9 t/s | 6.96 t/s |
+| Vulkan (`-ngl 99`) | **56.3 t/s** | **9.68 t/s** |
+| Speedup | 1.08× | 1.39× |
+| Expected (5600H+Vega7 datapoint) | 2.2× | 1.0× |
+
+Model: Qwen3-4B-Instruct-2507 Q4_K_M (2 497 280 736 bytes, size-verified — M-009).
+`llama-bench -r 3`, mean of three repetitions. Device: `Vulkan0: AMD Radeon(TM) Graphics
+(12191 MiB)` — native AMD driver, 12 GB GTT visible despite the 512 MB BIOS carve-out.
+
+**The published expectation did not transfer** — prompt speedup is 1.08×, not 2.2×, and
+generation gained 1.39× where flat was expected. Plausibly newer llama.cpp CPU kernels closing
+the gap and different Vulkan kernel maturity on GCN5. This is exactly why the spike measures
+instead of assuming.
+
+**The number that matters** — projected 1-hour-meeting summarization (~12k prompt tokens,
+~1.6k generated, map-reduce):
+
+| | Minutes | Budget |
+|---|---|---|
+| CPU only | **7.7** | 10 |
+| Vulkan | **6.3** | 10 |
+
+**Both within budget. The summarizer meets its target on this hardware even with no GPU
+acceleration at all.** Qwen3-4B Q4_K_M is confirmed as the default tier (§2.4, ADR sizing).
+
+Methodology note: a first run overlapped a recording E2E and produced depressed, misleading
+numbers (pp 38.9 CPU). Discarded; the table above is from an idle machine. Benchmarks and
+E2E tests must not share the machine.
+
+---
+
 ## Pending measurements
 
 To be filled by remaining Phase 0b spikes. **Do not populate from estimates.**
@@ -258,8 +296,8 @@ To be filled by remaining Phase 0b spikes. **Do not populate from estimates.**
 |---|---|---|---|
 | B-007 | whisper.cpp `large-v3-turbo`, CPU, 10 min audio | ✅ **measured: 0.72×** | expectation was ~0.3× — **beaten by 2.4×**, see below |
 | B-008 | whisper.cpp `large-v3-turbo`, Vulkan, 10 min audio | ⬜ spike 3 | 3–4× realtime — **but measured on RDNA2; Vega 7 is GCN5, may differ substantially** |
-| B-009 | llama.cpp Qwen3-4B Q4_K_M, CPU: prompt / generation t/s | ⬜ spike 4 | ~34 / ~10 t/s |
-| B-010 | llama.cpp Qwen3-4B Q4_K_M, Vulkan: prompt / generation t/s | ⬜ spike 4 | ~76 / ~10 t/s (generation is bandwidth-bound, offload does not help it) |
+| B-009 | llama.cpp Qwen3-4B Q4_K_M, CPU: prompt / generation t/s | ✅ **51.9 / 6.96** | expected ~34 / ~10 — see below |
+| B-010 | llama.cpp Qwen3-4B Q4_K_M, Vulkan: prompt / generation t/s | ✅ **56.3 / 9.68** | expected ~76 / ~10 — see below |
 | B-011 | Recording CPU and RAM at Balanced preset | ⬜ Phase 1 | < 15% CPU, < 400 MB RAM |
 | B-012 | VAD speech ratio on real meeting audio | ⬜ Phase 3 | 40–60% silence removed |
 | B-013 | Keyframe count for a 20-slide, 30-minute deck | ⬜ Phase 5 | 18–25 keyframes |
