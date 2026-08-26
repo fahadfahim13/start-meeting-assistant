@@ -12,7 +12,7 @@ import { resolveBinary } from '@main/platform/binaries'
 import * as meetings from '@main/db/repositories/meetings'
 import { buildCaptureArgs } from './ffmpeg-builder'
 import { LoopbackBridge } from './loopback-bridge'
-import { concatSegments, diskFreeBytes, isPlayable, probeDurationS } from './media-tools'
+import { concatSegments, diskFreeBytes, probeDurationS } from './media-tools'
 
 /**
  * Recording session lifecycle (Phase 2 shape).
