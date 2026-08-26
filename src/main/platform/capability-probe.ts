@@ -92,19 +92,33 @@ function cachePath(): string {
 }
 
 let inFlight: Promise<Capabilities> | null = null
+let memo: Capabilities | null = null
 
 export async function probeCapabilities(force = false): Promise<Capabilities> {
+  // In-memory memo for the process lifetime: the session path calls this
+  // three times (validate, start, spawnRun) and MUST NOT pay three probe
+  // suites. Found the hard way (M-016): with the disk cache bypassed, three
+  // uncached ~6 s probes delayed ffmpeg spawn ~20 s and a 20 s E2E recorded
+  // 2 s. The disk cache only skips probing across RESTARTS; this memo skips
+  // it within a run.
+  if (memo && !force) return memo
   if (inFlight) return inFlight
-  inFlight = doProbe(force).finally(() => {
-    inFlight = null
-  })
+  inFlight = doProbe(force)
+    .then((caps) => {
+      memo = caps
+      return caps
+    })
+    .finally(() => {
+      inFlight = null
+    })
   return inFlight
 }
 
 async function doProbe(force: boolean): Promise<Capabilities> {
   const version = await ffmpegVersion()
+  const forcedEncoder = process.env['MEETFROGE_FORCE_ENCODER']
 
-  if (!force) {
+  if (!force && !forcedEncoder) {
     try {
       const cached = CapabilitiesSchema.parse(JSON.parse(readFileSync(cachePath(), 'utf8')))
       // Cache is only valid for the same ffmpeg build; a driver change is caught
@@ -136,8 +150,15 @@ async function doProbe(force: boolean): Promise<Capabilities> {
   // Last-resort rung shares libx264's probe result at a cheaper preset.
   if (workingEncoders.includes('libx264')) workingEncoders.push('libx264_ultrafast')
 
+  // Test hook (docs/testing.md): force the fallback ladder without the
+  // hardware to prove it on. Only encoders that actually PASSED their probe
+  // can be forced - forcing a broken one would fake coverage.
+  const finalEncoders = forcedEncoder
+    ? workingEncoders.filter((e) => e === forcedEncoder || e === `${forcedEncoder}_ultrafast`)
+    : workingEncoders
+
   const caps: Capabilities = {
-    workingEncoders,
+    workingEncoders: finalEncoders,
     ddagrabWorks,
     gdigrabWorks,
     ffmpegVersion: version,
@@ -145,11 +166,14 @@ async function doProbe(force: boolean): Promise<Capabilities> {
     probeDurationMs: Date.now() - started,
   }
 
-  try {
-    mkdirSync(app.getPath('userData'), { recursive: true })
-    writeFileSync(cachePath(), JSON.stringify(caps, null, 2))
-  } catch (e) {
-    console.warn('[probe] failed to cache capabilities:', e)
+  // A forced ladder must never be cached - it would poison later normal runs.
+  if (!forcedEncoder) {
+    try {
+      mkdirSync(app.getPath('userData'), { recursive: true })
+      writeFileSync(cachePath(), JSON.stringify(caps, null, 2))
+    } catch (e) {
+      console.warn('[probe] failed to cache capabilities:', e)
+    }
   }
 
   return caps

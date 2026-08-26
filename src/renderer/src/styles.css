@@ -396,3 +396,4 @@ button.seg-time:hover { color: var(--accent); }
   position: absolute; width: 1px; height: 1px; overflow: hidden;
   clip: rect(0 0 0 0); white-space: nowrap;
 }
+.req-tag { font-size: 10px; color: var(--red); text-transform: uppercase; letter-spacing: 0.05em; }

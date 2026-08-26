@@ -2,6 +2,15 @@ import { useEffect, useState } from 'react'
 import { api } from '../api'
 import { t } from '../i18n'
 
+interface ModelRow {
+  id: string
+  file: string
+  status: 'ok' | 'missing' | 'corrupt'
+  purpose: string
+  tier: 'required' | 'recommended'
+  bytes: number
+}
+
 interface SettingsData {
   defaultPreset: 'efficient' | 'balanced' | 'high' | 'archival'
   language: 'en' | 'bn' | 'auto'
@@ -9,12 +18,26 @@ interface SettingsData {
   keyframeSensitivity: 'sensitive' | 'balanced' | 'sparse'
   modelsDir: string
   recordingsDir: string
-  models: { id: string; file: string; status: 'ok' | 'missing' | 'corrupt' }[]
+  models: ModelRow[]
+  vulkan: boolean
+}
+
+interface DlProgress {
+  modelId: string
+  received: number
+  total: number
+  state: 'downloading' | 'verifying' | 'done' | 'failed'
+  error?: string
+}
+
+function fmtGb(n: number): string {
+  return n >= 1024 ** 3 ? (n / 1024 ** 3).toFixed(1) + ' GB' : Math.round(n / 1024 ** 2) + ' MB'
 }
 
 export default function Settings(): React.JSX.Element {
   const [data, setData] = useState<SettingsData | null>(null)
   const [saved, setSaved] = useState(false)
+  const [progress, setProgress] = useState<Record<string, DlProgress>>({})
 
   const load = async (): Promise<void> => {
     const r = await api.invoke('settings:get', {})
@@ -22,7 +45,23 @@ export default function Settings(): React.JSX.Element {
   }
   useEffect(() => {
     void load()
+    const off = api.onModelsProgress((raw) => {
+      const p = raw as DlProgress
+      setProgress((prev) => ({ ...prev, [p.modelId]: p }))
+      if (p.state === 'done') void load()
+    })
+    return off
   }, [])
+
+  const missingBytes = (data?.models ?? [])
+    .filter((m) => m.status !== 'ok')
+    .reduce((acc, m) => acc + m.bytes, 0)
+
+  const downloadAll = (): void => {
+    for (const m of data?.models ?? []) {
+      if (m.status !== 'ok') void api.invoke('models:download', { modelId: m.id })
+    }
+  }
 
   const patch = async (p: Partial<Pick<SettingsData, 'defaultPreset' | 'language' | 'autoProcess' | 'keyframeSensitivity'>>): Promise<void> => {
     await api.invoke('settings:set', p)
@@ -89,19 +128,45 @@ export default function Settings(): React.JSX.Element {
 
       <section className="panel">
         <h2>{t.settings.models}</h2>
+        {missingBytes > 0 && (
+          <p className="messages warn">
+            {data.models.filter((m) => m.status !== 'ok').length} model(s) missing ({fmtGb(missingBytes)}).
+            Their pipeline stages will be skipped until downloaded.{' '}
+            <button className="ghost small" onClick={downloadAll}>Download all</button>
+          </p>
+        )}
         <table className="model-table">
           <tbody>
-            {data.models.map((m) => (
-              <tr key={m.id}>
-                <td>{m.id}</td>
-                <td className="mono">{m.file}</td>
-                <td>
-                  <span className={`model-status ${m.status}`}>
-                    {m.status === 'ok' ? t.settings.modelReady : m.status === 'missing' ? t.settings.modelMissing : t.settings.modelCorrupt}
-                  </span>
-                </td>
-              </tr>
-            ))}
+            {data.models.map((m) => {
+              const p = progress[m.id]
+              return (
+                <tr key={m.id}>
+                  <td>
+                    {m.purpose}
+                    {m.tier === 'required' && <span className="req-tag"> required</span>}
+                  </td>
+                  <td className="mono">{m.file}</td>
+                  <td>
+                    {p && p.state === 'downloading' ? (
+                      <span className="model-status">
+                        {Math.round((p.received / Math.max(1, p.total)) * 100)}%{' '}
+                        <button className="link" onClick={() => void api.invoke('models:cancel', { modelId: m.id })}>cancel</button>
+                      </span>
+                    ) : p && p.state === 'verifying' ? (
+                      <span className="model-status">verifying…</span>
+                    ) : p && p.state === 'failed' ? (
+                      <span className="model-status corrupt" title={p.error}>failed — retry?</span>
+                    ) : m.status === 'ok' ? (
+                      <span className="model-status ok">{t.settings.modelReady}</span>
+                    ) : (
+                      <button className="ghost small" onClick={() => void api.invoke('models:download', { modelId: m.id })}>
+                        get ({fmtGb(m.bytes)})
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
         <p className="hint">

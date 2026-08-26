@@ -16,7 +16,9 @@ import * as transcriptsRepo from './db/repositories/transcripts'
 import { getSettings, patchSettings } from './db/repositories/settings'
 import { verifyBinaries } from './security/integrity'
 import { log } from './log'
-import { MODEL_IDS, modelStatus, modelsDir } from './platform/models'
+import { MODEL_IDS, modelStatus, modelsDir, type ModelId } from './platform/models'
+import { MODEL_REGISTRY } from './platform/model-registry'
+import { cancelDownload, downloadModel } from './platform/model-downloader'
 
 // A second launch focuses the existing window instead of racing on state.
 if (!app.requestSingleInstanceLock()) {
@@ -170,12 +172,32 @@ function bootstrap(): void {
 
   handle('settings:get', async () => {
     const s = getSettings()
+    const caps = await probeCapabilities()
     return {
       ...s,
       modelsDir: modelsDir(),
       recordingsDir: sessions.recordingsDir(),
-      models: MODEL_IDS.map((id) => modelStatus(id)),
+      models: MODEL_IDS.map((id) => ({
+        ...modelStatus(id),
+        purpose: MODEL_REGISTRY[id].purpose,
+        tier: MODEL_REGISTRY[id].tier,
+        bytes: MODEL_REGISTRY[id].bytes,
+      })),
+      vulkan: caps.workingEncoders.length > 0, // proxy shown in the wizard; refined below
     }
+  })
+
+  handle('models:download', async ({ modelId }) => {
+    if (!MODEL_IDS.includes(modelId as ModelId)) return { started: false }
+    void downloadModel(modelId as ModelId, (p) => {
+      mainWindow?.webContents.send('models:progress', p)
+    }).catch(() => undefined) // progress events carry the failure detail
+    return { started: true }
+  })
+
+  handle('models:cancel', async ({ modelId }) => {
+    if (MODEL_IDS.includes(modelId as ModelId)) cancelDownload(modelId as ModelId)
+    return { ok: true }
   })
 
   handle('settings:set', async (patch) => {
@@ -462,7 +484,15 @@ function bootstrap(): void {
       micLastPts: micEnd,
       systemLastPts: sysEnd,
       micVsSystemMs: micEnd != null && sysEnd != null ? Math.round(Math.abs(micEnd - sysEnd) * 1000) : null,
-      ok: video.length >= 1 && audio.length >= 1 && (parsed.format?.duration ? parseFloat(parsed.format.duration) > 1 : false),
+      requestedS: parseInt(process.env['MEETFROGE_AUTOREC'] ?? '0', 10),
+      ok:
+        video.length >= 1 &&
+        audio.length >= 1 &&
+        (parsed.format?.duration
+          ? // startup costs a few seconds; anything under 60% of the request
+            // means the recording lost real time (M-016 would have FAILED this).
+            parseFloat(parsed.format.duration) >= 0.6 * parseInt(process.env['MEETFROGE_AUTOREC'] ?? '1', 10)
+          : false),
     }
 
     const outDir = path.join(app.getAppPath(), 'out')

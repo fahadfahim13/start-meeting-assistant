@@ -333,3 +333,27 @@ frame).
 the model actually honors your format before building a parser on it, and when a stage
 returns "success with zero results", suspect the parser before the model. Also: per-item
 catch-and-continue loops need a visible error counter; 6 silent failures looked like 'done'.
+
+---
+
+## M-016 — A cache guard caused a probe storm: 20 s recordings captured 2 s
+
+**Date:** 2026-08-26  **Area:** capture/probe  **Cost:** ~1 h of instrumented bisecting
+**Symptom:** with MEETFROGE_FORCE_ENCODER=libx264, a 20 s E2E produced a 1.5-2 s recording
+with all four tracks intact. Standalone reproductions of the identical ffmpeg graph — plain,
+segmented, and with a fed named pipe — all held realtime, refusing to reproduce it.
+**Cause:** watching segment-file creation live gave the smoking gun: ffmpeg spawned ~20 s
+AFTER the session started. The forced-encoder cache guard (added to stop the forced ladder
+from poisoning the disk cache) bypassed caching entirely, so probeCapabilities() re-ran the
+full ~6 s probe suite on EVERY call — and the session path calls it three times (validate,
+start, spawnRun). ~18 s of serialized probing pushed the spawn to just before the stop timer.
+The freeze theory, the muxer theory and the encoder-throughput theory were all wrong; the
+recording was fine — it just started late.
+**Fix:** in-memory memoization for the process lifetime (disk cache still skipped under
+force). This also fixed a LATENT real bug: any cache-invalid first run (fresh install, ffmpeg
+update) paid 3x probes before its first recording.
+**Verified:** forced-libx264 E2E now records 18.6/20 s with 2v+2a. The E2E ok-gate was also
+tightened to require >= 60% of the requested duration — the original bug PASSED the old gate.
+**Rule:** when output is truncated, check WHEN the producer started before theorizing about
+why it stalled. And an E2E that asserts "some output exists" will bless a recording that
+missed 90% of the meeting — assert against the REQUESTED quantity.

@@ -168,7 +168,17 @@ export const INVOKE_CHANNELS = {
       keyframeSensitivity: z.enum(['sensitive', 'balanced', 'sparse']),
       modelsDir: z.string(),
       recordingsDir: z.string(),
-      models: z.array(z.object({ id: z.string(), file: z.string(), status: z.enum(['ok', 'missing', 'corrupt']) })),
+      models: z.array(
+        z.object({
+          id: z.string(),
+          file: z.string(),
+          status: z.enum(['ok', 'missing', 'corrupt']),
+          purpose: z.string(),
+          tier: z.enum(['required', 'recommended']),
+          bytes: z.number(),
+        }),
+      ),
+      vulkan: z.boolean(),
     }),
   },
   'settings:set': {
@@ -202,6 +212,14 @@ export const INVOKE_CHANNELS = {
       ),
     }),
   },
+  'models:download': {
+    request: z.object({ modelId: z.string().max(64) }),
+    response: z.object({ started: z.boolean() }),
+  },
+  'models:cancel': {
+    request: z.object({ modelId: z.string().max(64) }),
+    response: z.object({ ok: z.boolean() }),
+  },
   'speakers:rename': {
     request: z.object({ speakerId: z.string().uuid(), displayName: z.string().min(1).max(80) }),
     response: z.object({ ok: z.boolean() }),
@@ -215,7 +233,7 @@ export const SEND_CHANNELS = ['loopback:frame'] as const
 export type SendChannel = (typeof SEND_CHANNELS)[number]
 
 /** Main -> renderer event channels. */
-export const EVENT_CHANNELS = ['session:state', 'loopback:stats', 'jobs:update'] as const
+export const EVENT_CHANNELS = ['session:state', 'loopback:stats', 'jobs:update', 'models:progress'] as const
 export type EventChannel = (typeof EVENT_CHANNELS)[number]
 
 /**
@@ -243,4 +261,5 @@ export interface MeetFrogeApi {
   onSessionState(cb: (status: unknown) => void): () => void
   onLoopbackStats(cb: (stats: unknown) => void): () => void
   onJobsUpdate(cb: (job: unknown) => void): () => void
+  onModelsProgress(cb: (p: unknown) => void): () => void
 }

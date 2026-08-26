@@ -69,7 +69,7 @@ export async function ensureLlm(config: ServerConfig): Promise<{ port: number; a
     '--port', String(port),
     '--api-key', apiKey,
     '-c', String(config.contextSize ?? 8192),
-    '-ngl', '99', // Vulkan offload when available; harmless without
+    '-ngl', process.env['MEETFROGE_DISABLE_VULKAN'] === '1' ? '0' : '99', // CPU-path test hook
     '--no-webui',
   ]
   if (config.mmprojPath) args.push('--mmproj', config.mmprojPath)
