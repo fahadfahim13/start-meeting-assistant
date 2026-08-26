@@ -299,3 +299,19 @@ button.seg-speaker.certain { color: var(--green); text-decoration: none; cursor:
 }
 .kf-caption { font-size: 13px; margin-bottom: 6px; }
 .kf-ocr { font-size: 12px; color: var(--muted); font-family: ui-monospace, Consolas, monospace; }
+
+/* ─── Summary view ───────────────────────────────────────────── */
+.view-switch { display: flex; gap: 4px; margin-bottom: 10px; }
+.summary-view { overflow-y: auto; flex: 1; font-size: 14px; }
+.sum-title { font-size: 18px; margin-bottom: 6px; }
+.sum-tldr { color: var(--accent); margin-bottom: 10px; }
+.sum-body { color: var(--text); margin-bottom: 14px; white-space: pre-wrap; }
+.summary-view h4 {
+  font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--muted); margin: 14px 0 6px;
+}
+.summary-view ul { padding-left: 20px; }
+.summary-view li { margin-bottom: 4px; }
+.actions { list-style: none; padding-left: 0 !important; }
+.actions label { display: flex; gap: 8px; align-items: baseline; cursor: pointer; }
+.actions .done { text-decoration: line-through; color: var(--muted); }

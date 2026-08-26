@@ -159,6 +159,55 @@ function bootstrap(): void {
     }
   })
 
+  handle('summary:get', async ({ meetingId }) => {
+    const row = getDb()
+      .prepare('SELECT content FROM summaries WHERE meeting_id = ? AND is_current = 1')
+      .get(meetingId) as unknown as { content: string } | undefined
+    const items = getDb()
+      .prepare('SELECT id, text, assignee, source_ms, done FROM action_items WHERE meeting_id = ?')
+      .all(meetingId) as unknown as { id: string; text: string; assignee: string | null; source_ms: number | null; done: number }[]
+    let summary = null
+    if (row) {
+      try {
+        const c = JSON.parse(row.content) as Record<string, unknown>
+        summary = {
+          title: String(c['title'] ?? ''),
+          tldr: String(c['tldr'] ?? ''),
+          summary: String(c['summary'] ?? ''),
+          key_points: (c['key_points'] as string[]) ?? [],
+          decisions: (c['decisions'] as { text: string; t?: number }[]) ?? [],
+          topics: (c['topics'] as string[]) ?? [],
+          open_questions: (c['open_questions'] as string[]) ?? [],
+          degraded: c['degraded'] === true,
+        }
+      } catch {
+        summary = null
+      }
+    }
+    return {
+      summary,
+      actionItems: items.map((i) => ({
+        id: i.id,
+        text: i.text,
+        assignee: i.assignee,
+        sourceMs: i.source_ms,
+        done: i.done === 1,
+      })),
+    }
+  })
+
+  handle('summary:regenerate', async ({ meetingId }) => {
+    const meeting = meetingsRepo.getMeeting(meetingId)
+    if (!meeting) return { enqueued: false }
+    pipeline.enqueue(meetingId, ['summarize'])
+    return { enqueued: true }
+  })
+
+  handle('actionitem:toggle', async ({ actionItemId, done }) => {
+    getDb().prepare('UPDATE action_items SET done = ? WHERE id = ?').run(done ? 1 : 0, actionItemId)
+    return { ok: true }
+  })
+
   handle('speakers:rename', async ({ speakerId, displayName }) => {
     transcriptsRepo.renameSpeaker(speakerId, displayName)
     return { ok: true }
@@ -333,10 +382,26 @@ function bootstrap(): void {
       scene_type: string | null
       change_score: number
     }[]
+    const summaryRow = getDb()
+      .prepare('SELECT content FROM summaries WHERE meeting_id = ? AND is_current = 1')
+      .get(meetingId) as unknown as { content: string } | undefined
+    const actionRows = getDb()
+      .prepare('SELECT text, assignee, source_ms FROM action_items WHERE meeting_id = ?')
+      .all(meetingId) as unknown as { text: string; assignee: string | null; source_ms: number | null }[]
+    let summaryDump: Record<string, unknown> | null = null
+    if (summaryRow) {
+      try {
+        summaryDump = JSON.parse(summaryRow.content) as Record<string, unknown>
+        summaryDump['action_items'] = actionRows.map((a) => ({ text: a.text, assignee: a.assignee, t: a.source_ms }))
+      } catch {
+        summaryDump = null
+      }
+    }
     const result = {
       transcribeE2e: true,
       date: new Date().toISOString(),
       meetingId,
+      summary: summaryDump,
       jobs: jobs.map((j) => ({ stage: j.stage, state: j.state, error: j.error_detail })),
       segmentCount: segments.length,
       segments: segments.map((s) => ({

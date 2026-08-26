@@ -20,6 +20,25 @@ interface Keyframe {
   sceneType: string | null
 }
 
+interface SummaryData {
+  title: string
+  tldr: string
+  summary: string
+  key_points: string[]
+  decisions: { text: string; t?: number }[]
+  topics: string[]
+  open_questions: string[]
+  degraded: boolean
+}
+
+interface ActionItem {
+  id: string
+  text: string
+  assignee: string | null
+  sourceMs: number | null
+  done: boolean
+}
+
 interface Segment {
   id: string
   startMs: number
@@ -66,6 +85,9 @@ export default function Library(): React.JSX.Element {
   const [segments, setSegments] = useState<Segment[]>([])
   const [keyframes, setKeyframes] = useState<Keyframe[]>([])
   const [activeKf, setActiveKf] = useState<Keyframe | null>(null)
+  const [summary, setSummary] = useState<SummaryData | null>(null)
+  const [actionItems, setActionItems] = useState<ActionItem[]>([])
+  const [view, setView] = useState<'summary' | 'transcript'>('summary')
   const [search, setSearch] = useState('')
   const [exportMsg, setExportMsg] = useState<string | null>(null)
 
@@ -97,7 +119,18 @@ export default function Library(): React.JSX.Element {
         setActiveKf(null)
       }
     })
+    void api.invoke('summary:get', { meetingId: selected }).then((r) => {
+      if (r.ok) {
+        setSummary(r.data.summary)
+        setActionItems(r.data.actionItems)
+      }
+    })
   }, [selected, items])
+
+  const toggleAction = async (item: ActionItem): Promise<void> => {
+    await api.invoke('actionitem:toggle', { actionItemId: item.id, done: !item.done })
+    setActionItems((prev) => prev.map((a) => (a.id === item.id ? { ...a, done: !a.done } : a)))
+  }
 
   const renameSpeaker = async (seg: Segment): Promise<void> => {
     if (!seg.speakerId || !selected) return
@@ -176,6 +209,16 @@ export default function Library(): React.JSX.Element {
           </div>
         </div>
         {exportMsg && <p className="export-msg">{exportMsg}</p>}
+        {selected && (
+          <div className="view-switch">
+            <button className={view === 'summary' ? 'tab active' : 'tab'} onClick={() => setView('summary')}>
+              Summary
+            </button>
+            <button className={view === 'transcript' ? 'tab active' : 'tab'} onClick={() => setView('transcript')}>
+              Transcript
+            </button>
+          </div>
+        )}
         {keyframes.length > 0 && (
           <div className="visual-timeline" aria-label="Screen timeline">
             <div className="kf-strip">
@@ -204,10 +247,68 @@ export default function Library(): React.JSX.Element {
           </div>
         )}
         {!selected && <p className="empty">Select a meeting to view its transcript.</p>}
-        {selected && segments.length === 0 && (
+        {selected && view === 'summary' && (
+          <div className="summary-view">
+            {!summary && <p className="empty">No summary yet — it appears after processing finishes.</p>}
+            {summary && (
+              <>
+                {summary.degraded && (
+                  <p className="messages warn">⚠ Structured summarization failed — showing merged raw notes.</p>
+                )}
+                <h3 className="sum-title">{summary.title}</h3>
+                <p className="sum-tldr">{summary.tldr}</p>
+                <p className="sum-body">{summary.summary}</p>
+                {summary.key_points.length > 0 && (
+                  <>
+                    <h4>Key points</h4>
+                    <ul>{summary.key_points.map((k) => <li key={k}>{k}</li>)}</ul>
+                  </>
+                )}
+                {summary.decisions.length > 0 && (
+                  <>
+                    <h4>Decisions</h4>
+                    <ul>{summary.decisions.map((d) => <li key={d.text}>{d.text}</li>)}</ul>
+                  </>
+                )}
+                {actionItems.length > 0 && (
+                  <>
+                    <h4>Action items</h4>
+                    <ul className="actions">
+                      {actionItems.map((a) => (
+                        <li key={a.id}>
+                          <label>
+                            <input type="checkbox" checked={a.done} onChange={() => void toggleAction(a)} />
+                            <span className={a.done ? 'done' : ''}>
+                              {a.text}
+                              {a.assignee ? ` — ${a.assignee}` : ''}
+                            </span>
+                          </label>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+                {summary.open_questions.length > 0 && (
+                  <>
+                    <h4>Open questions</h4>
+                    <ul>{summary.open_questions.map((q) => <li key={q}>{q}</li>)}</ul>
+                  </>
+                )}
+                <button
+                  className="ghost small"
+                  onClick={() => selected && void api.invoke('summary:regenerate', { meetingId: selected })}
+                >
+                  Regenerate
+                </button>
+              </>
+            )}
+          </div>
+        )}
+        {selected && view === 'transcript' && segments.length === 0 && (
           <p className="empty">No transcript yet — processing may still be running, or press “transcribe”.</p>
         )}
-        <div className="segments" role="list">
+        {view !== 'transcript' && !selected && null}
+        <div className="segments" role="list" style={{ display: view === 'transcript' ? undefined : 'none' }}>
           {filtered.map((s) => (
             <div key={s.id} role="listitem" className={`segment track-${s.track}`}>
               <span className="seg-time">{fmtClock(s.startMs)}</span>

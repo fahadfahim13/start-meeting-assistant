@@ -124,6 +124,40 @@ export const INVOKE_CHANNELS = {
       ),
     }),
   },
+  'summary:get': {
+    request: z.object({ meetingId: z.string().uuid() }),
+    response: z.object({
+      summary: z
+        .object({
+          title: z.string(),
+          tldr: z.string(),
+          summary: z.string(),
+          key_points: z.array(z.string()),
+          decisions: z.array(z.object({ text: z.string(), t: z.number().optional() })),
+          topics: z.array(z.string()),
+          open_questions: z.array(z.string()),
+          degraded: z.boolean(),
+        })
+        .nullable(),
+      actionItems: z.array(
+        z.object({
+          id: z.string(),
+          text: z.string(),
+          assignee: z.string().nullable(),
+          sourceMs: z.number().nullable(),
+          done: z.boolean(),
+        }),
+      ),
+    }),
+  },
+  'summary:regenerate': {
+    request: z.object({ meetingId: z.string().uuid() }),
+    response: z.object({ enqueued: z.boolean() }),
+  },
+  'actionitem:toggle': {
+    request: z.object({ actionItemId: z.string().uuid(), done: z.boolean() }),
+    response: z.object({ ok: z.boolean() }),
+  },
   'speakers:rename': {
     request: z.object({ speakerId: z.string().uuid(), displayName: z.string().min(1).max(80) }),
     response: z.object({ ok: z.boolean() }),

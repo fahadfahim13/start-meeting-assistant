@@ -124,6 +124,8 @@ export async function chat(input: {
   messages: ChatMessage[]
   maxTokens: number
   temperature?: number
+  /** llama-server grammar-constrained output (json_schema) — guarantees shape. */
+  responseFormat?: object
 }): Promise<string> {
   touchIdle()
   const res = await fetch(`http://127.0.0.1:${input.server.port}/v1/chat/completions`, {
@@ -136,6 +138,7 @@ export async function chat(input: {
       messages: input.messages,
       max_tokens: input.maxTokens,
       temperature: input.temperature ?? 0.2,
+      ...(input.responseFormat ? { response_format: input.responseFormat } : {}),
     }),
     signal: AbortSignal.timeout(10 * 60_000),
   })

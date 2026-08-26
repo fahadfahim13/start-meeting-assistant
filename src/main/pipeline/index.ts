@@ -8,6 +8,7 @@ import { alignTurns, diarizationAvailable, diarizeWav } from './stages/diarize'
 import { detectCameraPresence, extractKeyframes } from './stages/keyframes'
 import { ocrKeyframes } from './stages/ocr'
 import { captionKeyframes, vlmAvailable } from './stages/vlm'
+import { summarizeMeeting, summarizerAvailable } from './stages/summarize'
 import * as meetings from '@main/db/repositories/meetings'
 import * as transcripts from '@main/db/repositories/transcripts'
 import { modelAvailable } from '@main/platform/models'
@@ -197,7 +198,21 @@ export function createPipeline(events: QueueEvents): JobQueue {
     return 'done'
   })
 
+  queue.registerStage('summarize', async (ctx) => {
+    const meeting = meetings.getMeeting(ctx.job.meeting_id)
+    if (!meeting) throw new Error('meeting not found')
+    if (!summarizerAvailable()) {
+      console.warn('[pipeline] summarizer model missing - skipped')
+      return 'skipped'
+    }
+    const hasTranscript = transcripts.transcriptFor(meeting.id).length > 0
+    if (!hasTranscript) return 'skipped' // silent/audio-less meetings have nothing to say
+    const { degraded } = await summarizeMeeting({ meetingId: meeting.id, onProgress: ctx.setProgress })
+    if (degraded) console.warn('[pipeline] summary DEGRADED - prose fallback stored')
+    return 'done'
+  })
+
   return queue
 }
 
-export const PROCESSING_STAGES = ['extract', 'transcribe', 'diarize', 'keyframes', 'ocr', 'vlm']
+export const PROCESSING_STAGES = ['extract', 'transcribe', 'diarize', 'keyframes', 'ocr', 'vlm', 'summarize']

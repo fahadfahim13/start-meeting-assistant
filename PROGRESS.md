@@ -111,17 +111,22 @@ Also hardened en route: modelAvailable() now size-verifies (M-013 — a half-dow
 crashed llama-server); transcribe skips audio-less meetings; live-desktop test kept for manual
 runs (M-014 — the OS fights focus manipulation, and the user owns the screen).
 
-## Phase 6 — Summarization (2 d)
+## Phase 6 — Summarization (2 d) — ✅ CORE COMPLETE
 
 | Task | Status | Notes |
 |---|---|---|
-| `llama-server` lifecycle + token auth + idle unload | ⬜ | 127.0.0.1, ephemeral port |
-| Semantic chunking | ⬜ | split at speaker turns |
-| Map-reduce + intermediate tier | ⬜ | |
-| Visual context injection | ⬜ | |
-| zod validation + repair-prompt retry | ⬜ | |
-| Action items with click-to-seek | ⬜ | |
-| Export md / pdf / docx | ⬜ | |
+| `llama-server` lifecycle + token auth + idle unload | ✅ | built in Phase 5, shared |
+| Semantic chunking | ✅ | pure `chunking.ts`, turn-boundary splits, 4 unit tests |
+| Map-reduce | ✅ | grammar-constrained JSON (`json_schema` — probed with curl BEFORE building, M-015's rule) + zod defense in depth; intermediate tier deferred until a >15-chunk meeting exists to test on |
+| Visual context injection | ✅ | keyframe captions + OCR feed the reduce pass |
+| zod validation + retry + honest degraded fallback | ✅ | |
+| Action items (checkable, assignee, source timestamp) | ✅ | click-to-seek lands with the Phase 7 player |
+| Export md / pdf / docx | ⏸ | summary renders in UI; file exports land with Phase 7's export polish |
+| **E2E: full 7-stage pipeline on a real conversation** | ✅ | **"Engineering Hiring & Budget Review Meeting" — correct decisions WITH timestamps, action item attributed to the speaker who actually said it, 5/6 substance terms** |
+
+Honest artifact worth noting: whisper misheard the TTS "job descriptions" as "job discounts";
+the summarizer faithfully carried the transcript's error rather than inventing a correction —
+exactly the do-not-invent behavior the prompt demands.
 
 ## Phase 7 — Library, search, settings (3 d)
 
