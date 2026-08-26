@@ -40,18 +40,24 @@ function listRecordings() {
   }
 }
 
-// --- 1. burst wav: two sharp pips, distinct frequencies --------------------
+// --- 1. burst TRAIN: a 1 kHz pip every 3 s for 30 s ------------------------
+// A single late-fired burst proved fragile (M-020): the verified-reliable
+// pattern (continuous-tone A/B test) is a player that starts BEFORE the app
+// and keeps the render session alive across the whole recording. Every
+// repetition carries the same clock offset; correlation picks the strongest.
 spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y',
-  '-f', 'lavfi', '-i', 'sine=frequency=1000:duration=0.1,apad=pad_dur=0.4',
-  '-f', 'lavfi', '-i', 'sine=frequency=1500:duration=0.1',
-  '-filter_complex', '[0:a][1:a]concat=n=2:v=0:a=1,volume=0.9[a]', '-map', '[a]',
+  '-f', 'lavfi', '-i', 'sine=frequency=1000:duration=0.15',
+  '-af', 'apad=pad_dur=2.85,aloop=loop=9:size=144000,volume=0.9',
   '-ar', '48000', '-ac', '2', '-c:a', 'pcm_s16le', `${tmp}-burst.wav`,
 ], { shell: false })
 
-// --- 2. record via the app; burst anchored to file creation ----------------
+// --- 2. player first, then record via the app ------------------------------
 rmSync(e2eFile, { force: true })
-const before = listRecordings()
-console.log(`recording ${RECORD_S}s; burst fires ${BURST_AFTER_FILE_S}s after the file appears...`)
+console.log(`starting burst train (pip every 3 s), then recording ${RECORD_S}s...`)
+const player = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+  `$p = New-Object System.Media.SoundPlayer '${tmp}-burst.wav'; $p.PlaySync()`,
+], { shell: false, stdio: 'ignore' })
+await new Promise((r) => setTimeout(r, 2000)) // render session live before capture starts
 
 const appProc = spawn(path.join(root, 'node_modules', 'electron', 'dist', 'electron.exe'), ['.'], {
   cwd: root,
@@ -60,27 +66,8 @@ const appProc = spawn(path.join(root, 'node_modules', 'electron', 'dist', 'elect
   stdio: 'ignore',
 })
 
-let burstScheduled = false
-const watcher = setInterval(() => {
-  if (burstScheduled) return
-  const now = listRecordings()
-  for (const f of now) {
-    if (!before.has(f)) {
-      burstScheduled = true
-      clearInterval(watcher)
-      console.log(`file appeared (${f}) — burst in ${BURST_AFTER_FILE_S}s`)
-      setTimeout(() => {
-        spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-          `$p = New-Object System.Media.SoundPlayer '${tmp}-burst.wav'; $p.PlaySync()`,
-        ], { shell: false, stdio: 'ignore' })
-      }, BURST_AFTER_FILE_S * 1000)
-      return
-    }
-  }
-}, 250)
-
 await new Promise((resolve) => appProc.on('exit', resolve))
-clearInterval(watcher)
+try { player.kill() } catch { /* may have finished */ }
 
 if (!existsSync(e2eFile)) {
   console.error('SYNC FAIL: no e2e.json produced')
@@ -140,8 +127,10 @@ function locate(env, skipWindows) {
 }
 
 // skip the first second — recording-start transients are not the burst
-const micLoc = locate(envelope(mic), 50)
-const sysLoc = locate(envelope(sys), 50)
+const micEnv = envelope(mic)
+const sysEnv = envelope(sys)
+const micLoc = locate(micEnv, 0)
+const sysLoc = locate(sysEnv, 0)
 console.log(`sys burst  : ${sysLoc.atS.toFixed(2)}s (snr ${sysLoc.snr.toFixed(1)})`)
 console.log(`mic burst  : ${micLoc.atS.toFixed(2)}s (snr ${micLoc.snr.toFixed(1)})`)
 
@@ -155,23 +144,37 @@ if (micLoc.snr < 3) {
   process.exit(2)
 }
 
-// --- 5. refine with cross-correlation around the located positions ---------
-const coarseOffset = Math.round((micLoc.atS - sysLoc.atS) * SR)
-const wStart = Math.max(0, Math.floor(sysLoc.atS * SR) - SR / 2)
-const wLen = Math.min(SR * 2, sys.length - wStart)
-const REFINE = Math.floor(SR * 0.3) // ±300 ms around the coarse estimate
-let best = { lag: coarseOffset, score: -Infinity }
-for (let lag = coarseOffset - REFINE; lag <= coarseOffset + REFINE; lag++) {
+// --- 5. whole-envelope cross-correlation ------------------------------------
+// With a periodic train, per-track loudest-pip picking can select DIFFERENT
+// repetitions (3 s apart). Correlating the FULL envelopes within ±half-period
+// is unambiguous: every repetition reinforces the true offset peak.
+const HALF_PERIOD_WINDOWS = Math.floor((1.4 * SR) / WIN) // ±1.4 s in 20 ms windows
+const n = Math.min(micEnv.length, sysEnv.length)
+let envBest = { lag: 0, score: -Infinity }
+for (let lag = -HALF_PERIOD_WINDOWS; lag <= HALF_PERIOD_WINDOWS; lag++) {
   let acc = 0
-  for (let i = 0; i < wLen; i += 2) {
-    const a = sys[wStart + i] ?? 0
-    const b = mic[wStart + i + lag] ?? 0
+  for (let i = 0; i < n; i++) {
+    const a = sysEnv[i] ?? 0
+    const b = micEnv[i + lag] ?? 0
+    acc += a * b
+  }
+  if (acc > envBest.score) envBest = { lag, score: acc }
+}
+// sample-level refinement ±40 ms around the envelope estimate
+const coarse = envBest.lag * WIN
+const REFINE = Math.floor(SR * 0.04)
+let best = { lag: coarse, score: -Infinity }
+for (let lag = coarse - REFINE; lag <= coarse + REFINE; lag++) {
+  let acc = 0
+  for (let i = 0; i < Math.min(sys.length, SR * 20); i += 2) {
+    const a = sys[i] ?? 0
+    const b = mic[i + lag] ?? 0
     acc += a * b
   }
   if (acc > best.score) best = { lag, score: acc }
 }
 
-const degenerate = Math.abs(best.lag - coarseOffset) >= REFINE - 2
+const degenerate = Math.abs(envBest.lag) >= HALF_PERIOD_WINDOWS - 1
 const offsetMs = (best.lag / SR) * 1000
 
 console.log('\n' + '='.repeat(56))

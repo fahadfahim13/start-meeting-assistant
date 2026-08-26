@@ -71,7 +71,10 @@ export default function App(): React.JSX.Element {
   // Record, not discovered afterwards. Refreshes every 2 s while idle.
   useEffect(() => {
     const id = s.selection.screenId
-    if (!id || inSession) {
+    // previewsSuspended matters here exactly like the camera preview (M-007):
+    // a getSources thumbnail capture racing getDisplayMedia's loopback start
+    // can leave the system-audio stream silent (M-020).
+    if (!id || inSession || s.previewsSuspended) {
       setScreenShot(null)
       return
     }
@@ -86,7 +89,7 @@ export default function App(): React.JSX.Element {
       alive = false
       clearInterval(timer)
     }
-  }, [s.selection.screenId, inSession])
+  }, [s.selection.screenId, inSession, s.previewsSuspended])
 
   // Camera preview — WebRTC, entirely separate from the ffmpeg path, and torn
   // down the moment recording starts: cameras are EXCLUSIVE devices, and a

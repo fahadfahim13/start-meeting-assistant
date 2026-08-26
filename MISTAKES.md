@@ -403,3 +403,36 @@ troubleshooting.md documented this exact scenario in advance.
 change at any moment by plugging in a cable. Diagnostics that compare an acoustic path (mic)
 against a digital path (loopback) can localize this in one look — the mic hearing what
 loopback misses says "wrong endpoint", not "broken capture".
+
+---
+
+## M-020 — Loopback captured pure zeros when the render session started after capture
+
+**Date:** 2026-08-26  **Area:** capture/audio + testing  **Cost:** a long evening of layered diagnosis
+**Symptom:** the sync harness's system track was 23 s of exact digital zeros while the MIC
+heard the burst acoustically. Meanwhile spike 1 (bare loopback) and an app recording with a
+CONTINUOUS pre-started tone both captured sound perfectly. Same machine, same minute.
+**Cause (layered):** first the real dual-endpoint condition (M-019, headphones), then — after
+defaults were realigned programmatically via IPolicyConfig — the remaining trigger was the
+harness's own pattern: it fired a single 0.6 s burst SECONDS AFTER loopback capture began.
+A render session opening mid-capture did not reach this loopback stream; a session already
+playing when capture starts is delivered reliably.
+**Fix:** harness v3 — a 30 s burst TRAIN whose player starts BEFORE the app; v4 — whole-
+envelope cross-correlation within ±half-period so the periodic train cannot alias to the
+wrong repetition. The harness now measures every run.
+**Verified:** sys-track burst snr went from 0.0 to 12 930.
+**Rule:** to test loopback, have the render session ALIVE before capture starts. And when a
+signal-injection test fails, A/B the injection pattern itself (continuous vs late one-shot)
+before blaming the capture stack — three "capture bugs" here were one injection-pattern bug.
+
+---
+
+## R-11 escalation note (2026-08-26, harness v4 measurements)
+
+Three same-build runs: **+1098 ms, −695 ms, −370 ms** — the mic↔system start offset varies by
+±1 s AND flips sign between runs (ffmpeg input-open racing). A static itsoffset cannot fix
+this. End-PTS difference tracks it only loosely (−112 ms vs −370 ms measured on one file), so
+post-hoc file-based correction is also insufficient. Impact: cross-track interleaving order in
+the merged transcript can jitter by ~1 s; each track is internally accurate, and summaries /
+action items (sentence-level) are unaffected. Proper fix is a capture-graph redesign giving
+both audio paths one clock — scoped as future work in docs/risks.md R-11.

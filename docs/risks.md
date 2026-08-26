@@ -159,7 +159,7 @@ counter must surface in the UI so a future regression is visible rather than sil
 
 ---
 
-### R-11 · Mic ↔ system-audio relative offset (~120 ms, mic lags) 🟡
+### R-11 · Mic ↔ system-audio relative start offset (VARIABLE ±1 s) 🟠 — escalated 2026-08-26
 
 **Added:** 2026-08-25 · **Phase:** 2 · **Status:** open, measured, bounded
 
@@ -175,6 +175,12 @@ marginal at sentence granularity, visible at word granularity. Not a recording-i
 **Why not already fixed.** The obvious unification (`-use_wallclock_as_timestamps 1` on both
 audio inputs) breaks the recording outright — see MISTAKES.md M-010.
 
-**Phase 2 candidates, in test order:** measured static `-itsoffset` on the system input
-(handles the systematic ~120 ms), smaller `-audio_buffer_size`, `aresample=async=1`, and
-re-measuring outliers with a single-pip burst to rule out correlation artifacts.
+**2026-08-26 harness-v4 re-measurement (reliable at last):** +1098 / −695 / −370 ms across
+three same-build runs — variable AND sign-flipping (ffmpeg input-open race), so every static
+or post-hoc correction candidate is dead. End-PTS difference tracks it only loosely (−112 vs
+−370 ms on one file). Each track is internally accurate; summaries and action items are
+unaffected; only cross-track interleaving order can jitter ~1 s.
+
+**Actual fix (future work, scoped):** one clock for both audio paths — e.g. main-process-owned
+system-audio writing with wall timestamps plus wallclock-stamped mic in a separate audio-only
+ffmpeg process, muxed with video at finalize. A capture-graph redesign, not a flag.
