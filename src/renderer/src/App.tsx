@@ -3,6 +3,7 @@ import { useStore } from './store'
 import { startMeter, type MeterHandle } from './audio/meter'
 import Library from './features/Library'
 import Settings from './features/Settings'
+import { t } from './i18n'
 
 function fmtBytes(n: number): string {
   if (n < 1024 ** 2) return `${(n / 1024).toFixed(0)} KB`
@@ -115,21 +116,21 @@ export default function App(): React.JSX.Element {
   return (
     <div className="app">
       <header className="titlebar">
-        <h1>MeetFroge</h1>
+        <h1>{t.app.title}</h1>
         <nav className="tabs" aria-label="Views">
           <button className={tab === 'record' ? 'tab active' : 'tab'} onClick={() => setTab('record')}>
-            Record
+            {t.app.tabRecord}
           </button>
           <button className={tab === 'library' ? 'tab active' : 'tab'} onClick={() => setTab('library')}>
-            Library
+            {t.app.tabLibrary}
           </button>
           <button className={tab === 'settings' ? 'tab active' : 'tab'} onClick={() => setTab('settings')}>
-            Settings
+            {t.app.tabSettings}
           </button>
         </nav>
         {inSession && (
           <span className={paused ? 'rec-indicator paused' : 'rec-indicator'} aria-live="assertive">
-            {paused ? '⏸ PAUSED' : '● REC'} {fmtElapsed(s.session?.elapsedMs ?? 0)}
+            {paused ? t.app.paused : t.app.rec} {fmtElapsed(s.session?.elapsedMs ?? 0)}
           </span>
         )}
       </header>
@@ -145,14 +146,14 @@ export default function App(): React.JSX.Element {
       ) : (
       <main className="layout">
         <section className="panel setup" aria-label="Recording setup">
-          <h2>Sources</h2>
+          <h2>{t.setup.heading}</h2>
 
           <label>
-            Meeting title
+            {t.setup.meetingTitle}
             <input
               type="text"
               value={s.selection.title}
-              placeholder="Weekly sync"
+              placeholder={t.setup.meetingTitlePlaceholder}
               maxLength={200}
               disabled={inSession}
               onChange={(e) => s.select({ title: e.target.value })}
@@ -160,51 +161,51 @@ export default function App(): React.JSX.Element {
           </label>
 
           <label>
-            Screen / window
+            {t.setup.screen}
             <select
               value={s.selection.screenId ?? ''}
               disabled={inSession}
               onChange={(e) => s.select({ screenId: e.target.value || null })}
             >
-              <option value="">None</option>
+              <option value="">{t.setup.none}</option>
               {inv?.screens.map((sc) => (
                 <option key={sc.id} value={sc.id}>
-                  {sc.kind === 'screen' ? `Screen ${(sc.displayIndex ?? 0) + 1}` : sc.name.slice(0, 60)}
+                  {sc.kind === 'screen' ? t.setup.screenOption((sc.displayIndex ?? 0) + 1) : sc.name.slice(0, 60)}
                 </option>
               ))}
             </select>
           </label>
 
           <label>
-            Camera
+            {t.setup.camera}
             <select
               value={s.selection.cameraDeviceId ?? ''}
               disabled={inSession}
               onChange={(e) => s.select({ cameraDeviceId: e.target.value || null })}
             >
-              <option value="">None</option>
+              <option value="">{t.setup.none}</option>
               {inv?.cameras.map((c) => (
                 <option key={c.deviceId} value={c.deviceId}>
                   {c.label}
-                  {c.isVirtual ? ' (virtual)' : ''}
-                  {c.dshowName ? '' : ' — unavailable to recorder'}
+                  {c.isVirtual ? t.setup.virtualSuffix : ''}
+                  {c.dshowName ? '' : t.setup.unavailableSuffix}
                 </option>
               ))}
             </select>
           </label>
 
           <label>
-            Microphone
+            {t.setup.microphone}
             <select
               value={s.selection.microphoneDeviceId ?? ''}
               disabled={inSession}
               onChange={(e) => s.select({ microphoneDeviceId: e.target.value || null })}
             >
-              <option value="">None</option>
+              <option value="">{t.setup.none}</option>
               {inv?.microphones.map((m) => (
                 <option key={m.deviceId} value={m.deviceId}>
                   {m.label}
-                  {m.dshowName ? '' : ' — unavailable to recorder'}
+                  {m.dshowName ? '' : t.setup.unavailableSuffix}
                 </option>
               ))}
             </select>
@@ -217,33 +218,33 @@ export default function App(): React.JSX.Element {
               disabled={inSession}
               onChange={(e) => s.select({ systemAudio: e.target.checked })}
             />
-            Capture system audio (what you hear)
+            {t.setup.systemAudio}
           </label>
 
           <label>
-            Quality
+            {t.setup.quality}
             <select
               value={s.selection.preset}
               disabled={inSession}
               onChange={(e) => s.select({ preset: e.target.value as typeof s.selection.preset })}
             >
-              <option value="efficient">Efficient — 720p10, smallest files</option>
-              <option value="balanced">Balanced — 1080p15 (recommended)</option>
-              <option value="high">High — 1080p30</option>
-              <option value="archival">Archival — native, largest files</option>
+              <option value="efficient">{t.setup.qualityEfficient}</option>
+              <option value="balanced">{t.setup.qualityBalanced}</option>
+              <option value="high">{t.setup.qualityHigh}</option>
+              <option value="archival">{t.setup.qualityArchival}</option>
             </select>
           </label>
 
           <button className="ghost" disabled={inSession} onClick={() => void s.refreshDevices()}>
-            Refresh devices
+            {t.setup.refreshDevices}
           </button>
         </section>
 
         <section className="panel preview" aria-label="Preview">
-          <h2>Preview</h2>
+          <h2>{t.preview.heading}</h2>
           <video ref={videoRef} autoPlay muted playsInline className="camera-preview" />
-          <Meter level={micLevel} label="Mic" />
-          <Meter level={s.systemLevel} label="System" />
+          <Meter level={micLevel} label={t.preview.mic} />
+          <Meter level={s.systemLevel} label={t.preview.system} />
 
           {s.validation && !s.validation.ok && (
             <div className="messages error" role="alert">
@@ -261,7 +262,7 @@ export default function App(): React.JSX.Element {
           ) : null}
           {s.validation?.ok && (
             <p className="estimate">
-              ≈ {fmtBytes(s.validation.estimatedBytesPerHour)}/hour · {fmtBytes(s.validation.diskFreeBytes)} free
+              {t.preview.estimate(fmtBytes(s.validation.estimatedBytesPerHour), fmtBytes(s.validation.diskFreeBytes))}
             </p>
           )}
           {s.devicesError && (
@@ -283,7 +284,7 @@ export default function App(): React.JSX.Element {
                   <span>{fmtBytes(s.session.bytesWritten)}</span>
                   <span>{s.session.encoderInUse}</span>
                   {s.session.pcmDrops > 0 && (
-                    <span className="drop-warning">⚠ {s.session.pcmDrops} audio frames dropped</span>
+                    <span className="drop-warning">{t.controls.dropWarning(s.session.pcmDrops)}</span>
                   )}
                 </>
               )}
@@ -293,26 +294,26 @@ export default function App(): React.JSX.Element {
         </div>
         <div className="buttons">
           <button className="ghost" disabled={recording || s.busy} onClick={() => void s.validate()}>
-            Check setup
+            {t.controls.checkSetup}
           </button>
           {!inSession ? (
             <button className="record" disabled={s.busy || !inv} onClick={() => void s.start()}>
-              ● Record
+              {t.controls.record}
             </button>
           ) : (
             <>
               {recording && (
                 <button className="ghost" disabled={s.busy} onClick={() => void s.pause()}>
-                  ⏸ Pause
+                  {t.controls.pause}
                 </button>
               )}
               {paused && (
                 <button className="record" disabled={s.busy} onClick={() => void s.resume()}>
-                  ▶ Resume
+                  {t.controls.resume}
                 </button>
               )}
               <button className="stop" disabled={s.busy} onClick={() => void s.stop()}>
-                ■ Stop
+                {t.controls.stop}
               </button>
             </>
           )}

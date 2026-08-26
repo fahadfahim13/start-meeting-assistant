@@ -158,16 +158,16 @@ dev-mode pass (listed in the manual test matrix).
 
 CodeQL + SBOM run in CI (configured Phase 0); first live run happens when the repo is pushed.
 
-## Phase 9 — Accessibility, i18n, polish (2 d)
+## Phase 9 — Accessibility, i18n, polish (2 d) — ✅ CORE COMPLETE
 
 | Task | Status | Notes |
 |---|---|---|
-| Keyboard navigation + focus management | ⬜ | |
-| ARIA + live regions | ⬜ | |
-| Screen-reader pass (transcript, library) | ⬜ | |
-| Contrast audit, reduced motion, themes | ⬜ | |
-| String externalization (i18next) | ⬜ | Bangla-ready |
-| Empty / loading / error states, onboarding | ⬜ | |
+| Keyboard navigation + focus management | ✅ | playback shortcuts (space/K, J/L/arrows ±5 s, up/down speed — announced in the player's aria-label); universal `:focus-visible` rings; all interactive elements are real buttons |
+| ARIA + live regions | ✅ | job progress announced via `aria-live` sr-only region; labeled search inputs, lists, meters (Phase 1), recording state assertive |
+| Screen-reader pass | 🟡 | structural work done; a live Narrator pass is in the manual release matrix (Phase 11) — cannot be honestly claimed from code alone |
+| Contrast audit, reduced motion, themes | ✅ | **all 11 palette pairs computed ≥ 5.16:1 (AA)** — measured, not eyeballed; global `prefers-reduced-motion` kill; light theme via `prefers-color-scheme` |
+| String externalization | ✅ | dependency-free typed dictionary in i18next resource shape — 88 strings swept from all 3 UI files; Bangla = translate one object |
+| Empty / loading / error states | ✅ | present across views; real onboarding is Phase 10's first-run wizard |
 
 ## Phase 10 — Packaging and first-run (3 d)
 

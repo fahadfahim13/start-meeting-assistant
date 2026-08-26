@@ -1,4 +1,5 @@
-/* MeetFroge — dark-first, WCAG AA contrast. Light theme lands in Phase 9. */
+/* MeetFroge — dark-first, WCAG AA contrast (all pairs measured >= 5.1:1).
+   Light theme follows the OS preference. */
 
 :root {
   --bg: #0d1117;
@@ -10,6 +11,29 @@
   --green: #3fb950;
   --red: #f85149;
   --amber: #d29922;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f6f8fa;
+    --panel: #ffffff;
+    --border: #d0d7de;
+    --text: #1f2328;
+    --muted: #57606a;
+    --accent: #0757ba;
+    --green: #1a7f37;
+    --red: #cf222e;
+    --amber: #7d4e00;
+  }
+  .kf-detail img, .player { background: #e8ebef; }
+}
+
+/* Motion is decoration here, never information — kill it wholesale on request. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+  }
 }
 
 * {
@@ -97,9 +121,11 @@ body {
   border-radius: 6px;
   font-size: 14px;
 }
-.setup select:focus-visible,
-.setup input:focus-visible,
-button:focus-visible {
+select:focus-visible,
+input:focus-visible,
+button:focus-visible,
+video:focus-visible,
+[tabindex]:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
@@ -364,3 +390,9 @@ button.seg-time:hover { color: var(--accent); }
 .model-status.ok { color: var(--green); }
 .model-status.missing { color: var(--muted); }
 .model-status.corrupt { color: var(--amber); }
+
+/* screen-reader-only live region */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap;
+}

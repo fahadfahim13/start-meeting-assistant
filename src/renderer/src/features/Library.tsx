@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api'
+import { t } from '../i18n'
 
 interface MeetingItem {
   id: string
@@ -105,6 +106,39 @@ export default function Library(): React.JSX.Element {
     }
   }
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      const target = e.target as HTMLElement
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT') return
+      const v = videoRef.current
+      if (!v) return
+      const key = e.key.toLowerCase()
+      if (key === ' ' && target.tagName !== 'VIDEO' && target.tagName !== 'BUTTON') {
+        e.preventDefault()
+        if (v.paused) void v.play().catch(() => undefined)
+        else v.pause()
+      } else if (key === 'arrowleft' || key === 'j') {
+        e.preventDefault()
+        v.currentTime = Math.max(0, v.currentTime - 5)
+      } else if (key === 'arrowright' || key === 'l') {
+        e.preventDefault()
+        v.currentTime += 5
+      } else if (key === 'k') {
+        e.preventDefault()
+        if (v.paused) void v.play().catch(() => undefined)
+        else v.pause()
+      } else if (key === 'arrowup') {
+        e.preventDefault()
+        v.playbackRate = Math.min(2, +(v.playbackRate + 0.25).toFixed(2))
+      } else if (key === 'arrowdown') {
+        e.preventDefault()
+        v.playbackRate = Math.max(0.5, +(v.playbackRate - 0.25).toFixed(2))
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
   const runGlobalSearch = async (q: string): Promise<void> => {
     setGlobalSearch(q)
     if (!q.trim()) {
@@ -160,7 +194,7 @@ export default function Library(): React.JSX.Element {
 
   const renameSpeaker = async (seg: Segment): Promise<void> => {
     if (!seg.speakerId || !selected) return
-    const name = window.prompt(`Rename "${seg.speaker ?? seg.track}" to:`, seg.speaker ?? '')
+    const name = window.prompt(t.library.renamePrompt(seg.speaker ?? seg.track), seg.speaker ?? '')
     if (!name || !name.trim()) return
     await api.invoke('speakers:rename', { speakerId: seg.speakerId, displayName: name.trim().slice(0, 80) })
     const r = await api.invoke('transcript:get', { meetingId: selected })
@@ -170,7 +204,7 @@ export default function Library(): React.JSX.Element {
   const doExport = async (format: 'txt' | 'srt' | 'vtt' | 'json' | 'md'): Promise<void> => {
     if (!selected) return
     const r = await api.invoke('transcript:export', { meetingId: selected, format })
-    setExportMsg(r.ok && r.data.saved ? `Saved ${r.data.fileName}` : r.ok ? 'Export cancelled' : r.error.message)
+    setExportMsg(r.ok && r.data.saved ? t.library.exportSaved(r.data.fileName ?? '') : r.ok ? t.library.exportCancelled : r.error.message)
     setTimeout(() => setExportMsg(null), 4000)
   }
 
@@ -181,17 +215,18 @@ export default function Library(): React.JSX.Element {
   return (
     <div className="library">
       <section className="panel meeting-list" aria-label="Meetings">
-        <h2>Meetings</h2>
+        <h2 id="meetings-heading">{t.library.meetings}</h2>
         <input
           type="search"
           className="global-search"
-          placeholder="Search all meetings (speech + on-screen text)"
+          aria-label={t.library.searchAllAria}
+          placeholder={t.library.searchAll}
           value={globalSearch}
           onChange={(e) => void runGlobalSearch(e.target.value)}
         />
         {globalHits !== null && (
           <div className="search-hits">
-            {globalHits.length === 0 && <p className="empty">No matches.</p>}
+            {globalHits.length === 0 && <p className="empty">{t.library.noMatches}</p>}
             {globalHits.map((h, i) => (
               <button
                 key={i}
@@ -203,15 +238,15 @@ export default function Library(): React.JSX.Element {
                   pendingSeek.current = h.startMs
                 }}
               >
-                <span className={'hit-kind ' + h.kind}>{h.kind === 'screen' ? 'SCREEN' : 'SPEECH'}</span>
+                <span className={'hit-kind ' + h.kind}>{h.kind === 'screen' ? t.library.screenHit : t.library.speechHit}</span>
                 <span className="hit-text">{h.text}</span>
                 <span className="hit-meta">{h.meetingTitle} - {fmtClock(h.startMs)}</span>
               </button>
             ))}
           </div>
         )}
-        {items.length === 0 && <p className="empty">No recordings yet. Record one from the Record tab.</p>}
-        <ul style={{ display: globalHits !== null ? 'none' : undefined }}>
+        {items.length === 0 && <p className="empty">{t.library.noRecordings}</p>}
+        <ul aria-labelledby="meetings-heading" style={{ display: globalHits !== null ? 'none' : undefined }}>
           {items.map((m) => (
             <li key={m.id}>
               <button
@@ -221,7 +256,7 @@ export default function Library(): React.JSX.Element {
                 <span className="meeting-title">{m.title}</span>
                 <span className="meeting-meta">
                   {new Date(m.startedAt).toLocaleString()} · {fmtDuration(m.durationMs)} · {fmtBytes(m.bytes)}
-                  {m.state === 'recovered' && <span className="recovered-tag"> recovered</span>}
+                  {m.state === 'recovered' && <span className="recovered-tag">{t.library.recovered}</span>}
                 </span>
                 {m.tags.length > 0 && (
                   <span className="meeting-tags">{m.tags.map((t) => <span key={t} className="tag-chip">{t}</span>)}</span>
@@ -238,7 +273,7 @@ export default function Library(): React.JSX.Element {
                         void api.invoke('meetings:process', { meetingId: m.id }).then(refresh)
                       }}
                     >
-                      transcribe
+                      {t.library.transcribe}
                     </button>
                   )}
                 </span>
@@ -248,11 +283,15 @@ export default function Library(): React.JSX.Element {
         </ul>
       </section>
 
-      <section className="panel transcript" aria-label="Transcript">
+      <section className="panel transcript" aria-label="Meeting detail">
+        <div aria-live="polite" className="sr-only">
+          {items.find((m) => m.id === selected)?.jobs.filter((j) => j.state === 'running').map((j) => `${j.stage} ${j.progress}%`).join(', ')}
+        </div>
         <div className="transcript-toolbar">
           <input
             type="search"
-            placeholder="Search this transcript…"
+            aria-label={t.library.searchTranscriptAria}
+            placeholder={t.library.searchTranscript}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             disabled={!selected}
@@ -276,6 +315,7 @@ export default function Library(): React.JSX.Element {
               }
             }}
             className="player"
+            aria-label={t.library.playerAria}
             controls
             src={'mf-media://' + selected}
             onTimeUpdate={(e) => setCurrentMs(Math.round(e.currentTarget.currentTime * 1000))}
@@ -284,37 +324,37 @@ export default function Library(): React.JSX.Element {
         {selected && (
           <div className="view-switch">
             <button className={view === 'summary' ? 'tab active' : 'tab'} onClick={() => setView('summary')}>
-              Summary
+              {t.library.viewSummary}
             </button>
             <button className={view === 'transcript' ? 'tab active' : 'tab'} onClick={() => setView('transcript')}>
-              Transcript
+              {t.library.viewTranscript}
             </button>
             <span className="spacer" />
             <button
               className="ghost small"
               onClick={() => {
                 const m = items.find((x) => x.id === selected)
-                const next = window.prompt('Tags (comma-separated):', m?.tags.join(', ') ?? '')
+                const next = window.prompt(t.library.tagsPrompt, m?.tags.join(', ') ?? '')
                 if (next === null || !selected) return
                 const tags = next.split(',').map((t) => t.trim()).filter(Boolean).slice(0, 12)
                 void api.invoke('meetings:setTags', { meetingId: selected, tags }).then(refresh)
               }}
             >
-              tags
+              {t.library.tags}
             </button>
             <button
               className="ghost small danger"
               onClick={() => {
                 const m = items.find((x) => x.id === selected)
                 if (!selected || !m) return
-                if (!window.confirm('Delete "' + m.title + '" and its recording (' + fmtBytes(m.bytes) + ')? This cannot be undone.')) return
+                if (!window.confirm(t.library.deleteConfirm(m.title, fmtBytes(m.bytes)))) return
                 void api.invoke('meetings:delete', { meetingId: selected }).then(() => {
                   setSelected(null)
                   void refresh()
                 })
               }}
             >
-              delete
+              {t.library.delete}
             </button>
           </div>
         )}
@@ -348,33 +388,33 @@ export default function Library(): React.JSX.Element {
             )}
           </div>
         )}
-        {!selected && <p className="empty">Select a meeting to view its transcript.</p>}
+        {!selected && <p className="empty">{t.library.selectMeeting}</p>}
         {selected && view === 'summary' && (
           <div className="summary-view">
-            {!summary && <p className="empty">No summary yet — it appears after processing finishes.</p>}
+            {!summary && <p className="empty">{t.library.noSummary}</p>}
             {summary && (
               <>
                 {summary.degraded && (
-                  <p className="messages warn">⚠ Structured summarization failed — showing merged raw notes.</p>
+                  <p className="messages warn">{t.library.degradedSummary}</p>
                 )}
                 <h3 className="sum-title">{summary.title}</h3>
                 <p className="sum-tldr">{summary.tldr}</p>
                 <p className="sum-body">{summary.summary}</p>
                 {summary.key_points.length > 0 && (
                   <>
-                    <h4>Key points</h4>
+                    <h4>{t.library.keyPoints}</h4>
                     <ul>{summary.key_points.map((k) => <li key={k}>{k}</li>)}</ul>
                   </>
                 )}
                 {summary.decisions.length > 0 && (
                   <>
-                    <h4>Decisions</h4>
+                    <h4>{t.library.decisions}</h4>
                     <ul>{summary.decisions.map((d) => <li key={d.text}>{d.text}</li>)}</ul>
                   </>
                 )}
                 {actionItems.length > 0 && (
                   <>
-                    <h4>Action items</h4>
+                    <h4>{t.library.actionItems}</h4>
                     <ul className="actions">
                       {actionItems.map((a) => (
                         <li key={a.id}>
@@ -397,7 +437,7 @@ export default function Library(): React.JSX.Element {
                 )}
                 {summary.open_questions.length > 0 && (
                   <>
-                    <h4>Open questions</h4>
+                    <h4>{t.library.openQuestions}</h4>
                     <ul>{summary.open_questions.map((q) => <li key={q}>{q}</li>)}</ul>
                   </>
                 )}
@@ -405,14 +445,14 @@ export default function Library(): React.JSX.Element {
                   className="ghost small"
                   onClick={() => selected && void api.invoke('summary:regenerate', { meetingId: selected })}
                 >
-                  Regenerate
+                  {t.library.regenerate}
                 </button>
               </>
             )}
           </div>
         )}
         {selected && view === 'transcript' && segments.length === 0 && (
-          <p className="empty">No transcript yet — processing may still be running, or press “transcribe”.</p>
+          <p className="empty">{t.library.noTranscript}</p>
         )}
         {view !== 'transcript' && !selected && null}
         <div className="segments" role="list" style={{ display: view === 'transcript' ? undefined : 'none' }}>
@@ -422,12 +462,12 @@ export default function Library(): React.JSX.Element {
               role="listitem"
               className={`segment track-${s.track} ${currentMs >= s.startMs && currentMs < s.endMs ? 'current' : ''}`}
             >
-              <button className="seg-time" onClick={() => seekTo(s.startMs)} title="Jump to this moment">
+              <button className="seg-time" onClick={() => seekTo(s.startMs)} title={t.library.jumpTo}>
                 {fmtClock(s.startMs)}
               </button>
               <button
                 className={`seg-speaker ${s.certain ? 'certain' : ''}`}
-                title={s.certain ? 'Identified from your microphone track (exact)' : 'Diarized (probabilistic) — click to rename'}
+                title={s.certain ? t.library.speakerCertain : t.library.speakerDiarized}
                 onClick={() => void renameSpeaker(s)}
               >
                 {s.speaker ?? s.track}
