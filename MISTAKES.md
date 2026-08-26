@@ -236,3 +236,20 @@ input, `audio_buffer_size` reduction, and `aresample=async=1`.
 **Rule:** never change the timestamp DOMAIN of a subset of inputs feeding one muxer. Align
 clocks either for every input or for none. And a sync "fix" that has not been re-measured is
 not a fix (the harness caught this in one run).
+
+---
+
+## M-011 — Lossless concat silently dropped the camera and system-audio tracks
+
+**Date:** 2026-08-26  **Area:** capture/finalize  **Cost:** one E2E cycle
+**Symptom:** the first segmented-pipeline E2E produced a final file with 1 video + 1 audio
+track. The segments contained all four.
+**Cause:** `ffmpeg -f concat -i list -c copy out.mkv` without `-map` uses default stream
+selection: ONE "best" video stream and ONE "best" audio stream. The camera track and the
+system-audio track were discarded without any warning or error.
+**Fix:** `-map 0` on the concat command.
+**Verified:** E2E re-run — 2 video + 2 audio tracks in the final file; crash-recovery E2E
+confirms the same through the recovery path.
+**Rule:** any ffmpeg invocation that must preserve ALL streams needs an explicit `-map 0`.
+Default stream selection is lossy by design. And E2E checks must assert track COUNTS, not
+just success — that assertion is what caught this.

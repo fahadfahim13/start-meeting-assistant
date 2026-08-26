@@ -54,17 +54,19 @@ logged in `MISTAKES.md` before proceeding.
 | `-itsoffset` correction | ⏸ | deferred to Phase 2 as **R-11**: offset is systematic ~120 ms but wallclock unification broke recording (M-010); ordered fix candidates documented |
 | Lint + typecheck + 12 unit tests green | ✅ | |
 
-## Phase 2 — Recording controls and storage (2.5 d)
+## Phase 2 — Recording controls and storage (2.5 d) — ✅ CORE COMPLETE
 
 | Task | Status | Notes |
 |---|---|---|
-| Start / pause / resume / stop (segment-based pause) | ⬜ | ffmpeg has no native pause |
-| Segmented output + lossless concat | ⬜ | 5 min segments |
-| Crash recovery on startup | ⬜ | |
-| Disk pre-flight + live guard + auto-stop | ⬜ | |
-| SQLite schema, migrations, repositories | ⬜ | |
-| Recording indicator (tray + badge + pill) | ⬜ | security control, not a preference |
-| Quality presets | ⬜ | |
+| Start / pause / resume / stop (segment-based pause) | ✅ | E2E: 30 s window, 6 s pause → 20.5 s media, 2v+2a intact |
+| Segmented output + lossless concat | ✅ | `-map 0` mandatory (M-011: default selection silently drops tracks) |
+| Crash recovery on startup | ✅ | **E2E: hard-killed mid-recording → 3/4 segments recovered into a playable 24 s file, all 4 tracks, state 'recovered'** |
+| Disk pre-flight + live guard + auto-stop | ✅ | 10 s polling, 5 GB floor |
+| SQLite schema, migrations, repositories | ✅ | node:sqlite (ADR-011), full v1 schema, pre-migration backups |
+| Recording indicator (tray + badge + pill) | ✅ | tray red during any session; not suppressible (T8). Always-on-top pill → Phase 9 polish |
+| Quality presets | ✅ | landed in Phase 1 |
+
+Residual: mic↔system skew grows at pause joins (309 ms over one pause) — folded into **R-11**.
 
 ## Phase 3 — Job queue and transcription (3.5 d)
 
