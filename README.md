@@ -65,7 +65,7 @@ See [ROADMAP.md](ROADMAP.md).
 ## Install
 
 Not yet released. Once available, download the installer from
-[Releases](https://github.com/fahadfahim13/meetfroge/releases).
+[Releases](https://github.com/fahadfahim13/start-meeting-assistant/releases).
 
 The installer is currently unsigned, so Windows SmartScreen will warn on first run
 ("More info" → "Run anyway"). Verify the SHA-256 checksum published with each release.
@@ -73,7 +73,7 @@ The installer is currently unsigned, so Windows SmartScreen will warn on first r
 ## Build from source
 
 ```bash
-git clone https://github.com/fahadfahim13/meetfroge.git
+git clone https://github.com/fahadfahim13/start-meeting-assistant.git
 cd meetfroge
 nvm use          # Node 22.13.1
 npm ci

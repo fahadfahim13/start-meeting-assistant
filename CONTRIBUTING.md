@@ -16,7 +16,7 @@ without knowing it was a decision is not.
 ## Development setup
 
 ```bash
-git clone https://github.com/fahadfahim13/meetfroge.git
+git clone https://github.com/fahadfahim13/start-meeting-assistant.git
 cd meetfroge
 nvm use          # Node 22.13.1, pinned in .nvmrc
 npm ci           # npm ci, never npm install

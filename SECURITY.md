@@ -4,7 +4,7 @@
 
 **Do not open a public issue for a security vulnerability.**
 
-Report privately via [GitHub Security Advisories](https://github.com/fahadfahim13/meetfroge/security/advisories/new),
+Report privately via [GitHub Security Advisories](https://github.com/fahadfahim13/start-meeting-assistant/security/advisories/new),
 or by email to the maintainer listed in the repository metadata.
 
 Please include: what the issue is, how to reproduce it, what an attacker could achieve, and the

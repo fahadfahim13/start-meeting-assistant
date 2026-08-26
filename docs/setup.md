@@ -12,7 +12,7 @@
 | Vulkan SDK | 1.3+ | only if building with Vulkan support |
 
 ```bash
-git clone https://github.com/fahadfahim13/meetfroge.git
+git clone https://github.com/fahadfahim13/start-meeting-assistant.git
 cd meetfroge
 nvm use
 npm ci        # npm ci, not npm install — the lockfile is authoritative

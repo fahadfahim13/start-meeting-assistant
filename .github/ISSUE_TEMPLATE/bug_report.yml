@@ -8,7 +8,7 @@ body:
         Thanks for taking the time to report this.
 
         **Do not report security vulnerabilities here.** Use a
-        [private security advisory](https://github.com/fahadfahim13/meetfroge/security/advisories/new) instead.
+        [private security advisory](https://github.com/fahadfahim13/start-meeting-assistant/security/advisories/new) instead.
 
   - type: textarea
     id: what-happened
