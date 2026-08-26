@@ -315,3 +315,52 @@ button.seg-speaker.certain { color: var(--green); text-decoration: none; cursor:
 .actions { list-style: none; padding-left: 0 !important; }
 .actions label { display: flex; gap: 8px; align-items: baseline; cursor: pointer; }
 .actions .done { text-decoration: line-through; color: var(--muted); }
+
+/* ─── Phase 7: player, search, tags ──────────────────────────── */
+.player { width: 100%; max-height: 300px; background: #000; border-radius: 6px; margin-bottom: 10px; }
+.global-search {
+  width: 100%; padding: 7px 10px; margin-bottom: 10px;
+  background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px;
+}
+.search-hits { overflow-y: auto; flex: 1; }
+.search-hit {
+  display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left;
+  padding: 8px 10px; margin-bottom: 6px; background: var(--bg);
+  border: 1px solid var(--border); border-radius: 6px; cursor: pointer;
+}
+.search-hit:hover { border-color: var(--accent); }
+.hit-kind { font-size: 10px; letter-spacing: 0.06em; color: var(--muted); }
+.hit-kind.screen { color: var(--accent); }
+.hit-text { font-size: 13px; color: var(--text); }
+.hit-meta { font-size: 11px; color: var(--muted); }
+.meeting-tags { display: flex; gap: 4px; flex-wrap: wrap; }
+.tag-chip {
+  font-size: 11px; padding: 1px 8px; border-radius: 8px;
+  background: rgba(88, 166, 255, 0.15); color: var(--accent);
+}
+.view-switch .spacer { flex: 1; }
+button.danger { color: var(--red); border-color: var(--red); }
+button.seg-time {
+  background: none; border: none; padding: 0; color: var(--muted);
+  font-variant-numeric: tabular-nums; font-size: 13px; cursor: pointer; text-align: left;
+}
+button.seg-time:hover { color: var(--accent); }
+.segment.current { background: rgba(88, 166, 255, 0.08); border-left: 2px solid var(--accent); }
+
+/* ─── Settings ───────────────────────────────────────────────── */
+.settings-scroll { overflow-y: auto; display: block; }
+.settings { max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: 12px; }
+.settings label { display: block; margin-bottom: 10px; color: var(--muted); font-size: 13px; }
+.settings select {
+  display: block; width: 100%; margin-top: 4px; padding: 7px 10px;
+  background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px;
+}
+.settings .check { display: flex; align-items: center; gap: 8px; color: var(--text); }
+.hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+.hint code { background: var(--bg); padding: 1px 5px; border-radius: 3px; font-size: 11px; }
+.model-table { width: 100%; font-size: 13px; border-collapse: collapse; }
+.model-table td { padding: 5px 8px; border-bottom: 1px solid var(--border); }
+.model-table .mono { font-family: ui-monospace, Consolas, monospace; font-size: 11px; color: var(--muted); }
+.model-status.ok { color: var(--green); }
+.model-status.missing { color: var(--muted); }
+.model-status.corrupt { color: var(--amber); }

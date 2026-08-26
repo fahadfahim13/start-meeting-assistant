@@ -60,6 +60,17 @@ export function resolveModel(id: ModelId): string {
   return c.path
 }
 
+export const MODEL_IDS = Object.keys(MODEL_FILES) as ModelId[]
+
+export function modelStatus(id: ModelId): { id: string; file: string; status: 'ok' | 'missing' | 'corrupt' } {
+  const c = checkModel(id)
+  return {
+    id,
+    file: MODEL_FILES[id].file,
+    status: c.ok ? 'ok' : c.reason === 'missing' ? 'missing' : 'corrupt',
+  }
+}
+
 export function modelAvailable(id: ModelId): boolean {
   const c = checkModel(id)
   if (!c.ok && c.reason !== 'missing') {

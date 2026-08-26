@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 
 interface MeetingItem {
@@ -8,6 +8,7 @@ interface MeetingItem {
   durationMs: number | null
   state: string
   bytes: number | null
+  tags: string[]
   jobs: { stage: string; state: string; progress: number }[]
 }
 
@@ -88,6 +89,31 @@ export default function Library(): React.JSX.Element {
   const [summary, setSummary] = useState<SummaryData | null>(null)
   const [actionItems, setActionItems] = useState<ActionItem[]>([])
   const [view, setView] = useState<'summary' | 'transcript'>('summary')
+  const [globalSearch, setGlobalSearch] = useState('')
+  const [globalHits, setGlobalHits] = useState<{ meetingId: string; meetingTitle: string; kind: string; text: string; startMs: number }[] | null>(null)
+  const [currentMs, setCurrentMs] = useState(0)
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const pendingSeek = useRef<number | null>(null)
+
+  const seekTo = (ms: number): void => {
+    const v = videoRef.current
+    if (v) {
+      v.currentTime = ms / 1000
+      void v.play().catch(() => undefined)
+    } else {
+      pendingSeek.current = ms
+    }
+  }
+
+  const runGlobalSearch = async (q: string): Promise<void> => {
+    setGlobalSearch(q)
+    if (!q.trim()) {
+      setGlobalHits(null)
+      return
+    }
+    const r = await api.invoke('search:all', { query: q.trim() })
+    if (r.ok) setGlobalHits(r.data.hits)
+  }
   const [search, setSearch] = useState('')
   const [exportMsg, setExportMsg] = useState<string | null>(null)
 
@@ -156,8 +182,36 @@ export default function Library(): React.JSX.Element {
     <div className="library">
       <section className="panel meeting-list" aria-label="Meetings">
         <h2>Meetings</h2>
+        <input
+          type="search"
+          className="global-search"
+          placeholder="Search all meetings (speech + on-screen text)"
+          value={globalSearch}
+          onChange={(e) => void runGlobalSearch(e.target.value)}
+        />
+        {globalHits !== null && (
+          <div className="search-hits">
+            {globalHits.length === 0 && <p className="empty">No matches.</p>}
+            {globalHits.map((h, i) => (
+              <button
+                key={i}
+                className="search-hit"
+                onClick={() => {
+                  setSelected(h.meetingId)
+                  setGlobalHits(null)
+                  setGlobalSearch('')
+                  pendingSeek.current = h.startMs
+                }}
+              >
+                <span className={'hit-kind ' + h.kind}>{h.kind === 'screen' ? 'SCREEN' : 'SPEECH'}</span>
+                <span className="hit-text">{h.text}</span>
+                <span className="hit-meta">{h.meetingTitle} - {fmtClock(h.startMs)}</span>
+              </button>
+            ))}
+          </div>
+        )}
         {items.length === 0 && <p className="empty">No recordings yet. Record one from the Record tab.</p>}
-        <ul>
+        <ul style={{ display: globalHits !== null ? 'none' : undefined }}>
           {items.map((m) => (
             <li key={m.id}>
               <button
@@ -169,6 +223,9 @@ export default function Library(): React.JSX.Element {
                   {new Date(m.startedAt).toLocaleString()} · {fmtDuration(m.durationMs)} · {fmtBytes(m.bytes)}
                   {m.state === 'recovered' && <span className="recovered-tag"> recovered</span>}
                 </span>
+                {m.tags.length > 0 && (
+                  <span className="meeting-tags">{m.tags.map((t) => <span key={t} className="tag-chip">{t}</span>)}</span>
+                )}
                 <span className="meeting-jobs">
                   {m.jobs.map((j) => (
                     <JobBadge key={j.stage} job={j} />
@@ -210,12 +267,54 @@ export default function Library(): React.JSX.Element {
         </div>
         {exportMsg && <p className="export-msg">{exportMsg}</p>}
         {selected && (
+          <video
+            ref={(el) => {
+              videoRef.current = el
+              if (el && pendingSeek.current !== null) {
+                el.currentTime = pendingSeek.current / 1000
+                pendingSeek.current = null
+              }
+            }}
+            className="player"
+            controls
+            src={'mf-media://' + selected}
+            onTimeUpdate={(e) => setCurrentMs(Math.round(e.currentTarget.currentTime * 1000))}
+          />
+        )}
+        {selected && (
           <div className="view-switch">
             <button className={view === 'summary' ? 'tab active' : 'tab'} onClick={() => setView('summary')}>
               Summary
             </button>
             <button className={view === 'transcript' ? 'tab active' : 'tab'} onClick={() => setView('transcript')}>
               Transcript
+            </button>
+            <span className="spacer" />
+            <button
+              className="ghost small"
+              onClick={() => {
+                const m = items.find((x) => x.id === selected)
+                const next = window.prompt('Tags (comma-separated):', m?.tags.join(', ') ?? '')
+                if (next === null || !selected) return
+                const tags = next.split(',').map((t) => t.trim()).filter(Boolean).slice(0, 12)
+                void api.invoke('meetings:setTags', { meetingId: selected, tags }).then(refresh)
+              }}
+            >
+              tags
+            </button>
+            <button
+              className="ghost small danger"
+              onClick={() => {
+                const m = items.find((x) => x.id === selected)
+                if (!selected || !m) return
+                if (!window.confirm('Delete "' + m.title + '" and its recording (' + fmtBytes(m.bytes) + ')? This cannot be undone.')) return
+                void api.invoke('meetings:delete', { meetingId: selected }).then(() => {
+                  setSelected(null)
+                  void refresh()
+                })
+              }}
+            >
+              delete
             </button>
           </div>
         )}
@@ -227,7 +326,10 @@ export default function Library(): React.JSX.Element {
                   key={kf.id}
                   className={`kf-thumb ${activeKf?.id === kf.id ? 'active' : ''}`}
                   title={`${fmtClock(kf.timestampMs)}${kf.sceneType ? ` · ${kf.sceneType}` : ''}`}
-                  onClick={() => setActiveKf(activeKf?.id === kf.id ? null : kf)}
+                  onClick={() => {
+                    setActiveKf(activeKf?.id === kf.id ? null : kf)
+                    seekTo(kf.timestampMs)
+                  }}
                 >
                   <img src={kf.url} alt={kf.caption ?? `Screen at ${fmtClock(kf.timestampMs)}`} loading="lazy" />
                   <span className="kf-time">{fmtClock(kf.timestampMs)}</span>
@@ -282,6 +384,11 @@ export default function Library(): React.JSX.Element {
                               {a.text}
                               {a.assignee ? ` — ${a.assignee}` : ''}
                             </span>
+                            {a.sourceMs !== null && (
+                              <button className="link" onClick={() => { setView('transcript'); seekTo(a.sourceMs!) }}>
+                                {fmtClock(a.sourceMs)}
+                              </button>
+                            )}
                           </label>
                         </li>
                       ))}
@@ -310,8 +417,14 @@ export default function Library(): React.JSX.Element {
         {view !== 'transcript' && !selected && null}
         <div className="segments" role="list" style={{ display: view === 'transcript' ? undefined : 'none' }}>
           {filtered.map((s) => (
-            <div key={s.id} role="listitem" className={`segment track-${s.track}`}>
-              <span className="seg-time">{fmtClock(s.startMs)}</span>
+            <div
+              key={s.id}
+              role="listitem"
+              className={`segment track-${s.track} ${currentMs >= s.startMs && currentMs < s.endMs ? 'current' : ''}`}
+            >
+              <button className="seg-time" onClick={() => seekTo(s.startMs)} title="Jump to this moment">
+                {fmtClock(s.startMs)}
+              </button>
               <button
                 className={`seg-speaker ${s.certain ? 'certain' : ''}`}
                 title={s.certain ? 'Identified from your microphone track (exact)' : 'Diarized (probabilistic) — click to rename'}

@@ -1,6 +1,9 @@
 import { BrowserWindow, app, desktopCapturer, net, protocol, session, shell } from 'electron'
+import { createReadStream, statSync } from 'node:fs'
 import path from 'node:path'
+import { Readable } from 'node:stream'
 import { pathToFileURL } from 'node:url'
+import { getDb } from './db'
 
 /**
  * Hardened window factory. Every setting here is an invariant (CLAUDE.md,
@@ -11,19 +14,22 @@ const DEV_SERVER_URL = process.env['ELECTRON_RENDERER_URL']
 
 const CSP_PROD =
   "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
-  "img-src 'self' data: blob: mf-frame:; media-src 'self' blob: mediastream:; connect-src 'self'; " +
+  "img-src 'self' data: blob: mf-frame:; media-src 'self' blob: mediastream: mf-media:; connect-src 'self'; " +
   "object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'"
 
 // Vite dev needs its websocket + inline preamble; production stays strict.
 const CSP_DEV =
   "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; " +
-  "img-src 'self' data: blob: mf-frame:; media-src 'self' blob: mediastream:; connect-src 'self' ws: http://localhost:*; " +
+  "img-src 'self' data: blob: mf-frame:; media-src 'self' blob: mediastream: mf-media:; connect-src 'self' ws: http://localhost:*; " +
   "object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'"
 
 /** Must run BEFORE app ready. */
 export function registerFrameScheme(): void {
   protocol.registerSchemesAsPrivileged([
     { scheme: 'mf-frame', privileges: { standard: false, secure: true, supportFetchAPI: true } },
+    // stream:true is what lets <video> seek — the handler answers Range
+    // requests with 206 slices.
+    { scheme: 'mf-media', privileges: { standard: false, secure: true, supportFetchAPI: true, stream: true } },
   ])
 }
 
@@ -67,6 +73,49 @@ export function hardenSession(): void {
     const allowed = permission === 'media' || permission === 'display-capture'
     if (!allowed) console.warn(`[perm] denied: ${permission}`)
     callback(allowed)
+  })
+
+  // mf-media://<meetingId> streams the finalized recording to <video> with
+  // full Range support (seeking needs 206 slices). The path comes from the
+  // DB, never the URL — the id is just a lookup key (SECURITY.md T4).
+  protocol.handle('mf-media', (request) => {
+    try {
+      const url = new URL(request.url)
+      const meetingId = decodeURIComponent(url.hostname || url.pathname.replace(/^\/+/, ''))
+      if (!/^[0-9a-f-]{36}$/i.test(meetingId)) return new Response('bad request', { status: 400 })
+      const row = getDb()
+        .prepare(`SELECT media_path FROM meetings WHERE id = ? AND state IN ('ready','recovered')`)
+        .get(meetingId) as unknown as { media_path: string } | undefined
+      if (!row) return new Response('not found', { status: 404 })
+      const dataRoot = app.getPath('userData')
+      const resolved = path.resolve(dataRoot, row.media_path)
+      if (!resolved.startsWith(dataRoot + path.sep)) return new Response('forbidden', { status: 403 })
+
+      const size = statSync(resolved).size
+      const rangeHeader = request.headers.get('Range')
+      const common = { 'Accept-Ranges': 'bytes', 'Content-Type': 'video/x-matroska' }
+      if (rangeHeader) {
+        const m = /bytes=(\d+)-(\d*)/.exec(rangeHeader)
+        if (m) {
+          const start = parseInt(m[1]!, 10)
+          const end = m[2] ? Math.min(parseInt(m[2], 10), size - 1) : size - 1
+          if (start >= size || start > end) return new Response(null, { status: 416 })
+          const stream = Readable.toWeb(createReadStream(resolved, { start, end })) as ReadableStream
+          return new Response(stream, {
+            status: 206,
+            headers: {
+              ...common,
+              'Content-Range': `bytes ${start}-${end}/${size}`,
+              'Content-Length': String(end - start + 1),
+            },
+          })
+        }
+      }
+      const stream = Readable.toWeb(createReadStream(resolved)) as ReadableStream
+      return new Response(stream, { headers: { ...common, 'Content-Length': String(size) } })
+    } catch {
+      return new Response('error', { status: 500 })
+    }
   })
 
   // System audio: Chromium attaches loopback to a display capture (M-003).

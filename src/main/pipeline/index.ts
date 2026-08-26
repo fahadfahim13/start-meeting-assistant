@@ -9,6 +9,7 @@ import { detectCameraPresence, extractKeyframes } from './stages/keyframes'
 import { ocrKeyframes } from './stages/ocr'
 import { captionKeyframes, vlmAvailable } from './stages/vlm'
 import { summarizeMeeting, summarizerAvailable } from './stages/summarize'
+import { getSettings } from '@main/db/repositories/settings'
 import * as meetings from '@main/db/repositories/meetings'
 import * as transcripts from '@main/db/repositories/transcripts'
 import { modelAvailable } from '@main/platform/models'
@@ -81,7 +82,7 @@ export function createPipeline(events: QueueEvents): JobQueue {
         const base = idx
         const result = await transcribeTrack({
           wavPath: track.wavPath,
-          language: 'en', // per-meeting override arrives with settings (Phase 7); ADR-004 default
+          language: getSettings().language, // ADR-004 default 'en'; user-set in Settings
           threads: queue.threads,
           onProgress: (pct) => ctx.setProgress(Math.round(((base + pct / 100) / toDo.length) * 100)),
         })
@@ -156,6 +157,7 @@ export function createPipeline(events: QueueEvents): JobQueue {
           meetingId: meeting.id,
           mediaPath,
           workDir,
+          sensitivity: getSettings().keyframeSensitivity,
           onProgress: (pct) => ctx.setProgress(Math.round(pct * 0.9)),
         })
         console.log(

@@ -128,16 +128,20 @@ Honest artifact worth noting: whisper misheard the TTS "job descriptions" as "jo
 the summarizer faithfully carried the transcript's error rather than inventing a correction —
 exactly the do-not-invent behavior the prompt demands.
 
-## Phase 7 — Library, search, settings (3 d)
+## Phase 7 — Library, search, settings (3 d) — ✅ CORE COMPLETE
 
 | Task | Status | Notes |
 |---|---|---|
-| Virtualized library + filters | ⬜ | |
-| Unified FTS5 search (transcript + OCR) | ⬜ | distinctive capability |
-| Detail view + synced playback | ⬜ | |
-| Settings groups | ⬜ | |
-| Storage migration with verification | ⬜ | D: has only 12.8 GB |
-| Bulk operations + tags | ⬜ | |
+| Playback + synced transcript | ✅ | `mf-media://` protocol with real HTTP 206 Range slices (video seeking requires it); click-to-seek from segments, keyframes and action items; live current-segment highlight |
+| Unified FTS5 search (transcript + OCR) | ✅ | one box searches speech AND on-screen text across all meetings; hits open the meeting pre-seeked |
+| Settings | ✅ | quality preset, transcription language (ADR-004 override — now actually wired into the pipeline), auto-process, keyframe sensitivity; model status table with ok/missing/corrupt |
+| Tags + delete | ✅ | tag chips + filter-by-eye; delete with size-stated confirmation, cascading media/frames/FTS cleanup |
+| Virtualized list | ⏸ | matters at scale; deferred to Phase 9 polish (current lists render fine < 100 meetings) |
+| Storage migration with verification | ⏸ | deferred post-1.0 — D: has 12.8 GB free, migration is copy+verify+repath and deserves unhurried testing |
+| Bulk multi-select operations | ⏸ | single-meeting operations shipped; multi-select deferred to Phase 9 |
+
+Player Range-handler verified by build + boot smoke; interactive seek behavior needs a manual
+dev-mode pass (listed in the manual test matrix).
 
 ## Phase 8 — Security hardening and audit (2 d)
 

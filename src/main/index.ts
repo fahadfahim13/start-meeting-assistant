@@ -13,6 +13,8 @@ import { createPipeline, PROCESSING_STAGES } from './pipeline'
 import { renderTranscript } from './pipeline/export'
 import * as meetingsRepo from './db/repositories/meetings'
 import * as transcriptsRepo from './db/repositories/transcripts'
+import { getSettings, patchSettings } from './db/repositories/settings'
+import { MODEL_IDS, modelStatus, modelsDir } from './platform/models'
 
 // A second launch focuses the existing window instead of racing on state.
 if (!app.requestSingleInstanceLock()) {
@@ -78,6 +80,11 @@ function bootstrap(): void {
         durationMs: m.duration_ms,
         state: m.state,
         bytes: m.media_bytes,
+        tags: (
+          getDb()
+            .prepare('SELECT t.name FROM meeting_tags mt JOIN tags t ON t.id = mt.tag_id WHERE mt.meeting_id = ?')
+            .all(m.id) as unknown as { name: string }[]
+        ).map((t) => t.name),
         jobs: pipeline.jobsFor(m.id).map((j) => ({ stage: j.stage, state: j.state, progress: j.progress })),
       })),
     }
@@ -156,6 +163,101 @@ function bootstrap(): void {
         caption: r.vlm_caption,
         sceneType: r.scene_type,
       })),
+    }
+  })
+
+  handle('settings:get', async () => {
+    const s = getSettings()
+    return {
+      ...s,
+      modelsDir: modelsDir(),
+      recordingsDir: sessions.recordingsDir(),
+      models: MODEL_IDS.map((id) => modelStatus(id)),
+    }
+  })
+
+  handle('settings:set', async (patch) => {
+    patchSettings(patch)
+    return { ok: true }
+  })
+
+  handle('meetings:delete', async ({ meetingId }) => {
+    const meeting = meetingsRepo.getMeeting(meetingId)
+    if (!meeting) return { ok: false, freedBytes: 0 }
+    const { rmSync } = await import('node:fs')
+    let freed = 0
+    const mediaAbs = path.join(app.getPath('userData'), meeting.media_path)
+    try {
+      freed += statSync(mediaAbs).size
+    } catch { /* already gone */ }
+    // Media, frames, then rows (FKs cascade transcript/keyframes/summaries).
+    rmSync(mediaAbs, { force: true, recursive: true })
+    rmSync(path.join(app.getPath('userData'), 'frames', meetingId), { force: true, recursive: true })
+    getDb().prepare('DELETE FROM transcript_fts WHERE meeting_id = ?').run(meetingId)
+    getDb().prepare('DELETE FROM keyframe_fts WHERE meeting_id = ?').run(meetingId)
+    getDb().prepare('DELETE FROM meetings WHERE id = ?').run(meetingId)
+    return { ok: true, freedBytes: freed }
+  })
+
+  handle('meetings:setTags', async ({ meetingId, tags }) => {
+    const db = getDb()
+    db.exec('BEGIN')
+    try {
+      db.prepare('DELETE FROM meeting_tags WHERE meeting_id = ?').run(meetingId)
+      for (const name of tags) {
+        const existing = db.prepare('SELECT id FROM tags WHERE name = ?').get(name) as unknown as { id: string } | undefined
+        const tagId = existing?.id ?? (await import('node:crypto')).randomUUID()
+        if (!existing) db.prepare('INSERT INTO tags (id, name) VALUES (?, ?)').run(tagId, name)
+        db.prepare('INSERT INTO meeting_tags (meeting_id, tag_id) VALUES (?, ?)').run(meetingId, tagId)
+      }
+      db.exec('COMMIT')
+    } catch (e) {
+      db.exec('ROLLBACK')
+      throw e
+    }
+    return { ok: true }
+  })
+
+  handle('search:all', async ({ query }) => {
+    // Unified FTS across speech AND on-screen text — the plan's distinctive
+    // capability: find a meeting by words that were only ever on a slide.
+    const phrase = `"${query.replace(/"/g, '""')}"`
+    const db = getDb()
+    const speech = db
+      .prepare(
+        `SELECT f.meeting_id, ts.text, ts.start_ms, m.title
+         FROM transcript_fts f
+         JOIN transcript_segments ts ON ts.id = f.segment_id
+         JOIN meetings m ON m.id = f.meeting_id
+         WHERE transcript_fts MATCH ? ORDER BY rank LIMIT 30`,
+      )
+      .all(phrase) as unknown as { meeting_id: string; text: string; start_ms: number; title: string }[]
+    const screen = db
+      .prepare(
+        `SELECT f.meeting_id, k.ocr_text, k.vlm_caption, k.timestamp_ms, m.title
+         FROM keyframe_fts f
+         JOIN keyframes k ON k.id = f.keyframe_id
+         JOIN meetings m ON m.id = f.meeting_id
+         WHERE keyframe_fts MATCH ? ORDER BY rank LIMIT 30`,
+      )
+      .all(phrase) as unknown as { meeting_id: string; ocr_text: string | null; vlm_caption: string | null; timestamp_ms: number; title: string }[]
+    return {
+      hits: [
+        ...speech.map((h) => ({
+          meetingId: h.meeting_id,
+          meetingTitle: h.title,
+          kind: 'speech' as const,
+          text: h.text.slice(0, 200),
+          startMs: h.start_ms,
+        })),
+        ...screen.map((h) => ({
+          meetingId: h.meeting_id,
+          meetingTitle: h.title,
+          kind: 'screen' as const,
+          text: (h.ocr_text ?? h.vlm_caption ?? '').slice(0, 200),
+          startMs: h.timestamp_ms,
+        })),
+      ],
     }
   })
 

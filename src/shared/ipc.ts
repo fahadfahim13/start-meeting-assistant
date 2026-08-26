@@ -63,6 +63,7 @@ export const INVOKE_CHANNELS = {
           durationMs: z.number().nullable(),
           state: z.string(),
           bytes: z.number().nullable(),
+          tags: z.array(z.string()),
           jobs: z.array(z.object({ stage: z.string(), state: z.string(), progress: z.number() })),
         }),
       ),
@@ -157,6 +158,49 @@ export const INVOKE_CHANNELS = {
   'actionitem:toggle': {
     request: z.object({ actionItemId: z.string().uuid(), done: z.boolean() }),
     response: z.object({ ok: z.boolean() }),
+  },
+  'settings:get': {
+    request: z.object({}),
+    response: z.object({
+      defaultPreset: z.enum(['efficient', 'balanced', 'high', 'archival']),
+      language: z.enum(['en', 'bn', 'auto']),
+      autoProcess: z.boolean(),
+      keyframeSensitivity: z.enum(['sensitive', 'balanced', 'sparse']),
+      modelsDir: z.string(),
+      recordingsDir: z.string(),
+      models: z.array(z.object({ id: z.string(), file: z.string(), status: z.enum(['ok', 'missing', 'corrupt']) })),
+    }),
+  },
+  'settings:set': {
+    request: z.object({
+      defaultPreset: z.enum(['efficient', 'balanced', 'high', 'archival']).optional(),
+      language: z.enum(['en', 'bn', 'auto']).optional(),
+      autoProcess: z.boolean().optional(),
+      keyframeSensitivity: z.enum(['sensitive', 'balanced', 'sparse']).optional(),
+    }),
+    response: z.object({ ok: z.boolean() }),
+  },
+  'meetings:delete': {
+    request: z.object({ meetingId: z.string().uuid() }),
+    response: z.object({ ok: z.boolean(), freedBytes: z.number() }),
+  },
+  'meetings:setTags': {
+    request: z.object({ meetingId: z.string().uuid(), tags: z.array(z.string().min(1).max(40)).max(12) }),
+    response: z.object({ ok: z.boolean() }),
+  },
+  'search:all': {
+    request: z.object({ query: z.string().min(1).max(200) }),
+    response: z.object({
+      hits: z.array(
+        z.object({
+          meetingId: z.string(),
+          meetingTitle: z.string(),
+          kind: z.enum(['speech', 'screen']),
+          text: z.string(),
+          startMs: z.number(),
+        }),
+      ),
+    }),
   },
   'speakers:rename': {
     request: z.object({ speakerId: z.string().uuid(), displayName: z.string().min(1).max(80) }),

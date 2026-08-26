@@ -5,7 +5,14 @@ import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { resolveBinary } from '@main/platform/binaries'
 import { getDb } from '@main/db'
-import { FRAME_BYTES, pHash, selectKeyframes, type SelectionResult } from './keyframe-select'
+import { DEFAULT_SELECTION, FRAME_BYTES, pHash, selectKeyframes, type SelectionOptions, type SelectionResult } from './keyframe-select'
+
+/** Settings presets → selection options (plan §8.4.2 Sensitive/Balanced/Sparse). */
+export const SENSITIVITY_PRESETS: Record<'sensitive' | 'balanced' | 'sparse', SelectionOptions> = {
+  sensitive: { ...DEFAULT_SELECTION, hashThreshold: 8, strongMargin: 4, minGapS: 2 },
+  balanced: DEFAULT_SELECTION,
+  sparse: { ...DEFAULT_SELECTION, hashThreshold: 16, strongMargin: 8, minGapS: 5 },
+}
 
 /**
  * Visual sampling (plan §8.4.1–8.4.2). One ffmpeg pass emits the whole screen
@@ -40,6 +47,7 @@ export async function extractKeyframes(input: {
   meetingId: string
   mediaPath: string
   workDir: string
+  sensitivity?: 'sensitive' | 'balanced' | 'sparse'
   onProgress(pct: number): void
 }): Promise<KeyframesOutcome> {
   const grayPath = path.join(input.workDir, 'screen-gray.raw')
@@ -53,7 +61,7 @@ export async function extractKeyframes(input: {
   input.onProgress(25)
 
   const frames = new Uint8Array(readFileSync(grayPath))
-  const selection = selectKeyframes(frames)
+  const selection = selectKeyframes(frames, SENSITIVITY_PRESETS[input.sensitivity ?? 'balanced'])
   if (selection.capped) {
     console.warn(
       `[keyframes] cap bound: coverage truncated at ${selection.keyframes.length} keyframes for ${selection.totalFrames}s — surfaced via capture note`,

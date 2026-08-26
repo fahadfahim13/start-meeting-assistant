@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useStore } from './store'
 import { startMeter, type MeterHandle } from './audio/meter'
 import Library from './features/Library'
+import Settings from './features/Settings'
 
 function fmtBytes(n: number): string {
   if (n < 1024 ** 2) return `${(n / 1024).toFixed(0)} KB`
@@ -34,7 +35,7 @@ export default function App(): React.JSX.Element {
   const s = useStore()
   const videoRef = useRef<HTMLVideoElement>(null)
   const [micLevel, setMicLevel] = useState(0)
-  const [tab, setTab] = useState<'record' | 'library'>('record')
+  const [tab, setTab] = useState<'record' | 'library' | 'settings'>('record')
 
   useEffect(() => {
     void s.refreshDevices()
@@ -122,6 +123,9 @@ export default function App(): React.JSX.Element {
           <button className={tab === 'library' ? 'tab active' : 'tab'} onClick={() => setTab('library')}>
             Library
           </button>
+          <button className={tab === 'settings' ? 'tab active' : 'tab'} onClick={() => setTab('settings')}>
+            Settings
+          </button>
         </nav>
         {inSession && (
           <span className={paused ? 'rec-indicator paused' : 'rec-indicator'} aria-live="assertive">
@@ -130,7 +134,11 @@ export default function App(): React.JSX.Element {
         )}
       </header>
 
-      {tab === 'library' ? (
+      {tab === 'settings' ? (
+        <main className="layout-single settings-scroll">
+          <Settings />
+        </main>
+      ) : tab === 'library' ? (
         <main className="layout-single">
           <Library />
         </main>
