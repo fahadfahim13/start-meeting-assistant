@@ -95,16 +95,21 @@ Residual: mic↔system skew grows at pause joins (309 ms over one pause) — fol
 Known: whisper segments that straddle a turn change get the dominant speaker (segment-level
 alignment). Word-level refinement is a post-1.0 idea.
 
-## Phase 5 — Visual analysis (3.5 d)
+## Phase 5 — Visual analysis (3.5 d) — ✅ CORE COMPLETE
 
 | Task | Status | Notes |
 |---|---|---|
-| ffmpeg thumbnail extraction | ⬜ | downscale inside ffmpeg |
-| pHash + histogram keyframe selection | ⬜ | cap must be reported when it binds |
-| tesseract.js worker pool | ⬜ | full-res keyframes, not thumbnails |
-| VLM captioning + scene classification | ⬜ | |
-| Camera presence timeline | ⬜ | |
-| Visual timeline UI synced to transcript | ⬜ | |
+| ffmpeg gray-stream sampling | ✅ | raw 32×32 gray at 1 fps — 1 KB/s, zero image decode in Node |
+| pHash + histogram keyframe selection | ✅ | DCT pHash + intersection veto-band (Pearson degenerates on flat histograms — caught by unit test); cap reported when binding; 8 unit tests |
+| OCR (tesseract.js, offline, confidence-gated) | ✅ | full-res re-extracts; feeds keyframe FTS |
+| VLM captioning + scene classification | ✅ | SmolVLM2 via shared llama-server; free-prose caption + keyword scene inference (M-015: 2B models ignore format instructions) |
+| Camera presence timeline | ✅ | luminance/variance heuristic, spans in DB |
+| Visual timeline UI | ✅ | thumbnail strip via mf-frame:// protocol (path-contained), click-to-expand with OCR + caption |
+| **Deterministic pipeline E2E** | ✅ | **synthetic 6-slide video: keyframes 6/6 at exact boundaries, OCR 6/6 words, VLM 6/6 captions naming the actual slide colors** |
+
+Also hardened en route: modelAvailable() now size-verifies (M-013 — a half-downloaded mmproj
+crashed llama-server); transcribe skips audio-less meetings; live-desktop test kept for manual
+runs (M-014 — the OS fights focus manipulation, and the user owns the screen).
 
 ## Phase 6 — Summarization (2 d)
 

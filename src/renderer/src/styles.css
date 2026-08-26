@@ -271,3 +271,31 @@ button.seg-speaker {
   color: var(--amber); font-size: 13px; cursor: pointer; text-decoration: underline dotted;
 }
 button.seg-speaker.certain { color: var(--green); text-decoration: none; cursor: default; }
+
+/* ─── Visual timeline ────────────────────────────────────────── */
+.visual-timeline { margin-bottom: 10px; }
+.kf-strip {
+  display: flex; gap: 6px; overflow-x: auto; padding-bottom: 6px;
+}
+.kf-thumb {
+  flex: 0 0 auto; position: relative; padding: 0; border: 2px solid var(--border);
+  border-radius: 4px; background: var(--bg); cursor: pointer; overflow: hidden;
+}
+.kf-thumb img { display: block; height: 54px; width: auto; }
+.kf-thumb.active, .kf-thumb:hover { border-color: var(--accent); }
+.kf-time {
+  position: absolute; bottom: 0; right: 0; font-size: 10px; padding: 0 4px;
+  background: rgba(0,0,0,0.7); color: #fff; font-variant-numeric: tabular-nums;
+}
+.kf-detail {
+  display: grid; grid-template-columns: 320px 1fr; gap: 12px;
+  padding: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  margin-top: 6px;
+}
+.kf-detail img { width: 100%; border-radius: 4px; }
+.kf-tag {
+  display: inline-block; font-size: 11px; text-transform: uppercase; color: var(--accent);
+  border: 1px solid var(--accent); border-radius: 8px; padding: 1px 8px; margin-bottom: 6px;
+}
+.kf-caption { font-size: 13px; margin-bottom: 6px; }
+.kf-ocr { font-size: 12px; color: var(--muted); font-family: ui-monospace, Consolas, monospace; }

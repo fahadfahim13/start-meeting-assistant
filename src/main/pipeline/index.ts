@@ -5,6 +5,9 @@ import { JobQueue, type QueueEvents } from './queue'
 import { extractAudio, type ExtractedTrack } from './stages/extract-audio'
 import { transcribeTrack } from './stages/transcribe'
 import { alignTurns, diarizationAvailable, diarizeWav } from './stages/diarize'
+import { detectCameraPresence, extractKeyframes } from './stages/keyframes'
+import { ocrKeyframes } from './stages/ocr'
+import { captionKeyframes, vlmAvailable } from './stages/vlm'
 import * as meetings from '@main/db/repositories/meetings'
 import * as transcripts from '@main/db/repositories/transcripts'
 import { modelAvailable } from '@main/platform/models'
@@ -49,6 +52,10 @@ export function createPipeline(events: QueueEvents): JobQueue {
   queue.registerStage('transcribe', async (ctx) => {
     const meeting = meetings.getMeeting(ctx.job.meeting_id)
     if (!meeting) throw new Error('meeting not found')
+    // Same condition extract skips on — an audio-less meeting has nothing to
+    // transcribe (found by the synthetic video harness: extract skipped,
+    // transcribe then failed on the missing checkpoint).
+    if (!meeting.has_mic && !meeting.has_system_audio) return 'skipped'
     if (!modelAvailable('whisper-large-v3-turbo-q5')) {
       throw new Error('whisper model not downloaded')
     }
@@ -133,7 +140,64 @@ export function createPipeline(events: QueueEvents): JobQueue {
     }
   })
 
+  queue.registerStage('keyframes', async (ctx) => {
+    const meeting = meetings.getMeeting(ctx.job.meeting_id)
+    if (!meeting) throw new Error('meeting not found')
+    if (meeting.has_screen !== 1 && meeting.has_camera !== 1) return 'skipped'
+
+    const mediaPath = path.join(app.getPath('userData'), meeting.media_path)
+    if (!existsSync(mediaPath)) throw new Error(`media missing: ${meeting.media_path}`)
+    const workDir = workDirFor(`${meeting.id}-frames`)
+
+    try {
+      if (meeting.has_screen === 1) {
+        const outcome = await extractKeyframes({
+          meetingId: meeting.id,
+          mediaPath,
+          workDir,
+          onProgress: (pct) => ctx.setProgress(Math.round(pct * 0.9)),
+        })
+        console.log(
+          `[pipeline] keyframes: ${outcome.written} written from ${outcome.selection.totalFrames}s` +
+            (outcome.selection.capped ? ' (CAP BOUND - coverage truncated)' : ''),
+        )
+        ctx.setCheckpoint({ capped: outcome.selection.capped, written: outcome.written })
+      }
+      if (meeting.has_camera === 1 && meeting.has_screen === 1) {
+        // Camera is v:1 only when a screen track occupies v:0.
+        const spans = await detectCameraPresence({ meetingId: meeting.id, mediaPath, workDir })
+        console.log(`[pipeline] camera presence: ${spans} span(s)`)
+      }
+      return 'done'
+    } finally {
+      rmSync(workDir, { recursive: true, force: true })
+    }
+  })
+
+  queue.registerStage('ocr', async (ctx) => {
+    const meeting = meetings.getMeeting(ctx.job.meeting_id)
+    if (!meeting) throw new Error('meeting not found')
+    if (meeting.has_screen !== 1) return 'skipped'
+    const outcome = await ocrKeyframes({ meetingId: meeting.id, onProgress: ctx.setProgress })
+    console.log(`[pipeline] ocr: ${outcome.withText}/${outcome.processed} keyframes carry text`)
+    return 'done'
+  })
+
+  queue.registerStage('vlm', async (ctx) => {
+    const meeting = meetings.getMeeting(ctx.job.meeting_id)
+    if (!meeting) throw new Error('meeting not found')
+    if (meeting.has_screen !== 1) return 'skipped'
+    if (!vlmAvailable()) {
+      // Degradation: OCR + keyframes still carry the visual story.
+      console.warn('[pipeline] VLM models missing - captions skipped')
+      return 'skipped'
+    }
+    const outcome = await captionKeyframes({ meetingId: meeting.id, onProgress: ctx.setProgress })
+    console.log(`[pipeline] vlm: ${outcome.captioned}/${outcome.processed} captioned`)
+    return 'done'
+  })
+
   return queue
 }
 
-export const PROCESSING_STAGES = ['extract', 'transcribe', 'diarize']
+export const PROCESSING_STAGES = ['extract', 'transcribe', 'diarize', 'keyframes', 'ocr', 'vlm']

@@ -11,6 +11,15 @@ interface MeetingItem {
   jobs: { stage: string; state: string; progress: number }[]
 }
 
+interface Keyframe {
+  id: string
+  timestampMs: number
+  url: string
+  ocrText: string | null
+  caption: string | null
+  sceneType: string | null
+}
+
 interface Segment {
   id: string
   startMs: number
@@ -55,6 +64,8 @@ export default function Library(): React.JSX.Element {
   const [items, setItems] = useState<MeetingItem[]>([])
   const [selected, setSelected] = useState<string | null>(null)
   const [segments, setSegments] = useState<Segment[]>([])
+  const [keyframes, setKeyframes] = useState<Keyframe[]>([])
+  const [activeKf, setActiveKf] = useState<Keyframe | null>(null)
   const [search, setSearch] = useState('')
   const [exportMsg, setExportMsg] = useState<string | null>(null)
 
@@ -73,10 +84,18 @@ export default function Library(): React.JSX.Element {
   useEffect(() => {
     if (!selected) {
       setSegments([])
+      setKeyframes([])
+      setActiveKf(null)
       return
     }
     void api.invoke('transcript:get', { meetingId: selected }).then((r) => {
       if (r.ok) setSegments(r.data.segments)
+    })
+    void api.invoke('keyframes:get', { meetingId: selected }).then((r) => {
+      if (r.ok) {
+        setKeyframes(r.data.keyframes)
+        setActiveKf(null)
+      }
     })
   }, [selected, items])
 
@@ -157,6 +176,33 @@ export default function Library(): React.JSX.Element {
           </div>
         </div>
         {exportMsg && <p className="export-msg">{exportMsg}</p>}
+        {keyframes.length > 0 && (
+          <div className="visual-timeline" aria-label="Screen timeline">
+            <div className="kf-strip">
+              {keyframes.map((kf) => (
+                <button
+                  key={kf.id}
+                  className={`kf-thumb ${activeKf?.id === kf.id ? 'active' : ''}`}
+                  title={`${fmtClock(kf.timestampMs)}${kf.sceneType ? ` · ${kf.sceneType}` : ''}`}
+                  onClick={() => setActiveKf(activeKf?.id === kf.id ? null : kf)}
+                >
+                  <img src={kf.url} alt={kf.caption ?? `Screen at ${fmtClock(kf.timestampMs)}`} loading="lazy" />
+                  <span className="kf-time">{fmtClock(kf.timestampMs)}</span>
+                </button>
+              ))}
+            </div>
+            {activeKf && (
+              <div className="kf-detail">
+                <img src={activeKf.url} alt="" />
+                <div className="kf-info">
+                  {activeKf.sceneType && <span className="kf-tag">{activeKf.sceneType}</span>}
+                  {activeKf.caption && <p className="kf-caption">{activeKf.caption}</p>}
+                  {activeKf.ocrText && <p className="kf-ocr">{activeKf.ocrText.slice(0, 400)}</p>}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         {!selected && <p className="empty">Select a meeting to view its transcript.</p>}
         {selected && segments.length === 0 && (
           <p className="empty">No transcript yet — processing may still be running, or press “transcribe”.</p>

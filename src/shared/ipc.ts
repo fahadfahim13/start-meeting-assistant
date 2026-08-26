@@ -109,6 +109,21 @@ export const INVOKE_CHANNELS = {
     request: z.object({ jobId: z.string().uuid() }),
     response: z.object({ ok: z.boolean() }),
   },
+  'keyframes:get': {
+    request: z.object({ meetingId: z.string().uuid() }),
+    response: z.object({
+      keyframes: z.array(
+        z.object({
+          id: z.string(),
+          timestampMs: z.number(),
+          url: z.string().max(500),
+          ocrText: z.string().nullable(),
+          caption: z.string().nullable(),
+          sceneType: z.string().nullable(),
+        }),
+      ),
+    }),
+  },
   'speakers:rename': {
     request: z.object({ speakerId: z.string().uuid(), displayName: z.string().min(1).max(80) }),
     response: z.object({ ok: z.boolean() }),

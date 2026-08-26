@@ -1,5 +1,6 @@
-import { BrowserWindow, desktopCapturer, session, shell } from 'electron'
+import { BrowserWindow, app, desktopCapturer, net, protocol, session, shell } from 'electron'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 /**
  * Hardened window factory. Every setting here is an invariant (CLAUDE.md,
@@ -10,17 +11,47 @@ const DEV_SERVER_URL = process.env['ELECTRON_RENDERER_URL']
 
 const CSP_PROD =
   "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
-  "img-src 'self' data: blob:; media-src 'self' blob: mediastream:; connect-src 'self'; " +
+  "img-src 'self' data: blob: mf-frame:; media-src 'self' blob: mediastream:; connect-src 'self'; " +
   "object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'"
 
 // Vite dev needs its websocket + inline preamble; production stays strict.
 const CSP_DEV =
   "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; " +
-  "img-src 'self' data: blob:; media-src 'self' blob: mediastream:; connect-src 'self' ws: http://localhost:*; " +
+  "img-src 'self' data: blob: mf-frame:; media-src 'self' blob: mediastream:; connect-src 'self' ws: http://localhost:*; " +
   "object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'"
+
+/** Must run BEFORE app ready. */
+export function registerFrameScheme(): void {
+  protocol.registerSchemesAsPrivileged([
+    { scheme: 'mf-frame', privileges: { standard: false, secure: true, supportFetchAPI: true } },
+  ])
+}
 
 export function hardenSession(): void {
   const ses = session.defaultSession
+
+  // mf-frame://<meetingId>/<fileName> serves keyframe JPEGs — the only way
+  // images reach the sandboxed renderer under the strict CSP. Containment:
+  // both path parts are validated, and the resolved path must stay inside
+  // the frames root (SECURITY.md T4).
+  protocol.handle('mf-frame', (request) => {
+    try {
+      const url = new URL(request.url)
+      const meetingId = decodeURIComponent(url.hostname || url.pathname.split('/')[1] || '')
+      const file = decodeURIComponent(url.pathname.replace(/^\/+/, '').split('/').pop() || '')
+      if (!/^[0-9a-f-]{36}$/i.test(meetingId) || !/^kf_\d+\.jpg$/.test(file)) {
+        return new Response('bad request', { status: 400 })
+      }
+      const framesRoot = path.join(app.getPath('userData'), 'frames')
+      const resolved = path.resolve(framesRoot, meetingId, file)
+      if (!resolved.startsWith(framesRoot + path.sep)) {
+        return new Response('forbidden', { status: 403 })
+      }
+      return net.fetch(pathToFileURL(resolved).toString())
+    } catch {
+      return new Response('error', { status: 500 })
+    }
+  })
 
   ses.webRequest.onHeadersReceived((details, callback) => {
     callback({

@@ -276,3 +276,60 @@ native addons IN Electron before integrating, and when one fails, isolate WHICH 
 affected before replacing the whole dependency. One 30-line reader saved the addon.
 Also (again, see M-shell history): never write Windows paths with backslashes inside
 bash-heredoc'd JS — two escaping layers eat them. Forward slashes work everywhere.
+
+---
+
+## M-013 — "Model available" meant "file exists", so a half-downloaded model crashed the stage
+
+**Date:** 2026-08-26  **Area:** pipeline/models  **Cost:** one E2E cycle
+**Symptom:** the VLM stage reported the models available and started llama-server, which
+exited 1 during startup. The mmproj file was 120 MB of an expected 592 MB — still downloading.
+**Cause:** `modelAvailable()` checked `existsSync` only. A file being written IS a file that
+exists. This is M-009's lesson (a download is done when the byte count matches, not when a
+file appears) resurfacing at the CONSUMER side of the same data.
+**Fix:** the model registry now carries the exact expected byte size per model, and both
+`modelAvailable()` and `resolveModel()` verify it — a partial file reports unavailable with a
+logged reason, and the stage skips honestly instead of failing. Phase 7's manager adds SHA-256.
+**Verified:** re-run with the mmproj still partial — vlm job state 'skipped', not 'failed'.
+**Rule:** existence is not integrity. Every artifact both produced and consumed asynchronously
+needs its validity CHECKED at the consumer, not assumed from presence — the producer's
+verification does not protect a consumer that can run mid-write.
+
+---
+
+## M-014 — Windows denies focus to background launches: the E2E recorded the wrong window
+
+**Date:** 2026-08-26  **Area:** testing/visual  **Cost:** one E2E cycle
+**Symptom:** the slideshow E2E opened its browser page mid-recording, but the keyframes showed
+the pre-existing foreground window; OCR faithfully read an editor screen. Change detection
+"failed" with 2 keyframes because the screen genuinely never changed.
+**Cause:** Windows foreground-lock: a process launched from the background may not steal focus
+from the active window. `start /max page.html` opened the slideshow BEHIND everything.
+**Fix:** invert the ordering — open the slideshow foreground FIRST, then launch the app, which
+minimizes itself once recording starts (MEETFROGE_MINIMIZE hook) so the previous foreground
+window (the slides) returns to front.
+**Rule:** a screen-capture test must control what owns the screen, and the OS actively fights
+focus manipulation. Arrange the stage before the camera rolls instead of trying to swap props
+mid-shot. Also: when a visual assertion fails, look at WHAT was captured before doubting the
+detector — the OCR text named the actual foreground window and diagnosed the whole failure.
+
+---
+
+## M-015 — A 2B VLM ignores format instructions: the parser found nothing in perfect answers
+
+**Date:** 2026-08-26  **Area:** pipeline/vlm  **Cost:** one pipeline cycle + a curl session
+**Symptom:** the vlm job finished 'done' with 0 captions. Debugging the endpoint directly
+showed the model answering PERFECTLY — it described "ALPHA" and "slide 1 of 6" accurately —
+but in free prose, ignoring the requested `TYPE:`/`CAPTION:` two-line format entirely.
+The parser required those markers and extracted null from a correct answer.
+**Cause:** SmolVLM2-2.2B does not follow multi-field output-format instructions. Format
+compliance is a capability that small models often lack; the parser assumed it.
+**Fix:** ask ONE thing ("describe this screenshot in one or two sentences") and treat the
+whole reply as the caption; infer the scene type from caption keywords instead of requesting
+it as a field. No second image call — image encoding dominates cost (1 382 prompt tokens per
+frame).
+**Verified:** curl probe first (isolates model-vs-code), then the synthetic pipeline run.
+**Rule:** with small models, the OUTPUT CONTRACT is part of the model choice — validate that
+the model actually honors your format before building a parser on it, and when a stage
+returns "success with zero results", suspect the parser before the model. Also: per-item
+catch-and-continue loops need a visible error counter; 6 silent failures looked like 'done'.

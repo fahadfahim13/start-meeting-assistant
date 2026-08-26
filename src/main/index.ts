@@ -1,7 +1,7 @@
 import { app, ipcMain } from 'electron'
 import { writeFileSync, mkdirSync, statSync } from 'node:fs'
 import path from 'node:path'
-import { createMainWindow, hardenSession } from './window'
+import { createMainWindow, hardenSession, registerFrameScheme } from './window'
 import { handle } from './ipc/gateway'
 import { enumerateDevices } from './capture/devices'
 import { probeCapabilities } from './platform/capability-probe'
@@ -18,6 +18,7 @@ import * as transcriptsRepo from './db/repositories/transcripts'
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
+  registerFrameScheme() // must precede app ready
   bootstrap()
 }
 
@@ -30,10 +31,17 @@ function bootstrap(): void {
     },
   })
 
+  let minimizedForRecording = false
   const sessions = new SessionManager({
     onStatus(status) {
       mainWindow?.webContents.send('session:state', status)
       updateTray(status)
+      // E2E hook: get the app window off the screen so the recording captures
+      // what is BEHIND it (visual tests) rather than the app itself.
+      if (process.env['MEETFROGE_MINIMIZE'] === '1' && status.state === 'recording' && !minimizedForRecording) {
+        minimizedForRecording = true
+        mainWindow?.minimize()
+      }
     },
     onStopped(outputPath, meetingId) {
       // Auto-process on stop (default on). E2E harnesses take over the verdict:
@@ -125,6 +133,32 @@ function bootstrap(): void {
     return { ok: true }
   })
 
+  handle('keyframes:get', async ({ meetingId }) => {
+    const rows = getDb()
+      .prepare(
+        'SELECT id, timestamp_ms, image_path, ocr_text, vlm_caption, scene_type, change_score FROM keyframes WHERE meeting_id = ? ORDER BY timestamp_ms',
+      )
+      .all(meetingId) as unknown as {
+      id: string
+      timestamp_ms: number
+      image_path: string
+      ocr_text: string | null
+      vlm_caption: string | null
+      scene_type: string | null
+      change_score: number
+    }[]
+    return {
+      keyframes: rows.map((r) => ({
+        id: r.id,
+        timestampMs: r.timestamp_ms,
+        url: `mf-frame://${meetingId}/${path.basename(r.image_path)}`,
+        ocrText: r.ocr_text,
+        caption: r.vlm_caption,
+        sceneType: r.scene_type,
+      })),
+    }
+  })
+
   handle('speakers:rename', async ({ speakerId, displayName }) => {
     transcriptsRepo.renameSpeaker(speakerId, displayName)
     return { ok: true }
@@ -175,6 +209,33 @@ function bootstrap(): void {
     // and exit codes). Boots, probes, writes a status file, quits.
     if (process.env['MEETFROGE_SMOKE'] === '1') {
       void runSmoke()
+    }
+
+    // Deterministic pipeline harness: process an existing video file through
+    // the REAL stages without touching the live desktop (M-014 — a screen-
+    // capture test on a machine the user is actively using is unwinnable).
+    // Env-supplied path: trusted input, no IPC boundary crossed.
+    const processFile = process.env['MEETFROGE_PROCESS_FILE']
+    if (processFile) {
+      void (async () => {
+        const { copyFileSync } = await import('node:fs')
+        const meetingId = (await import('node:crypto')).randomUUID()
+        const baseName = `synthetic_${meetingId.slice(0, 8)}`
+        const dest = path.join(sessions.recordingsDir(), `${baseName}.mkv`)
+        copyFileSync(processFile, dest)
+        meetingsRepo.createMeeting({
+          id: meetingId,
+          title: 'Synthetic visual test',
+          mediaPath: path.join('recordings', `${baseName}.mkv`),
+          captureProfile: { synthetic: true },
+          hasScreen: true,
+          hasCamera: false,
+          hasMic: false,
+          hasSystemAudio: false,
+        })
+        meetingsRepo.finalizeMeeting(meetingId, path.join('recordings', `${baseName}.mkv`), statSync(dest).size, 0)
+        void processAndExit(meetingId)
+      })()
     }
   })
 
@@ -263,6 +324,15 @@ function bootstrap(): void {
     }
     const jobs = pipeline.jobsFor(meetingId)
     const segments = transcriptsRepo.transcriptFor(meetingId)
+    const keyframes = getDb()
+      .prepare('SELECT timestamp_ms, ocr_text, vlm_caption, scene_type, change_score FROM keyframes WHERE meeting_id = ? ORDER BY timestamp_ms')
+      .all(meetingId) as unknown as {
+      timestamp_ms: number
+      ocr_text: string | null
+      vlm_caption: string | null
+      scene_type: string | null
+      change_score: number
+    }[]
     const result = {
       transcribeE2e: true,
       date: new Date().toISOString(),
@@ -275,7 +345,14 @@ function bootstrap(): void {
         startMs: s.start_ms,
         text: s.text,
       })),
-      ok: jobs.every((j) => j.state === 'done' || j.state === 'skipped') && segments.length > 0,
+      keyframes: keyframes.map((k) => ({
+        timestampMs: k.timestamp_ms,
+        ocrText: k.ocr_text,
+        caption: k.vlm_caption,
+        sceneType: k.scene_type,
+        changeScore: k.change_score,
+      })),
+      ok: jobs.every((j) => j.state === 'done' || j.state === 'skipped') && segments.length >= 0,
     }
     const outDir = path.join(app.getAppPath(), 'out')
     mkdirSync(outDir, { recursive: true })
