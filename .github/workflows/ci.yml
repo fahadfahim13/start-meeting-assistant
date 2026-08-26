@@ -20,7 +20,7 @@ jobs:
     name: Docs and hygiene
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Required tracking files are present
         run: |
@@ -48,7 +48,7 @@ jobs:
     name: Build and test
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Check for app scaffold
         id: scaffold
@@ -102,7 +102,7 @@ jobs:
     name: Loopback audio smoke test
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Check for spike
         id: spike
