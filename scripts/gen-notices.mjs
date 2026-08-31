@@ -1,6 +1,6 @@
 // Generates THIRD_PARTY_NOTICES.md: production npm dependencies (with their
 // licenses read from node_modules) plus the bundled binaries and models.
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -14,11 +14,9 @@ function walk(name) {
   const pj = path.join(dir, 'package.json')
   if (!existsSync(pj)) return
   const meta = JSON.parse(readFileSync(pj, 'utf8'))
-  let licenseText = null
   for (const f of ['LICENSE', 'LICENSE.md', 'LICENSE.txt', 'LICENCE', 'license']) {
     const p = path.join(dir, f)
     if (existsSync(p)) {
-      licenseText = readFileSync(p, 'utf8').slice(0, 400)
       break
     }
   }

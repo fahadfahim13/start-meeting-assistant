@@ -56,7 +56,14 @@ export const CapabilitiesSchema = z.object({
   /** Encoders that passed a REAL 1-second probe encode, best first. Never trust -encoders. */
   workingEncoders: z.array(EncoderIdSchema),
   ddagrabWorks: z.boolean(),
+  /** gdigrab probed through the SAME chain production runs, not a cheaper stand-in. */
   gdigrabWorks: z.boolean(),
+  /**
+   * Bumped whenever the probe suite itself changes. An older cache is missing
+   * or behind on this field, `CapabilitiesSchema.parse` rejects it, and the
+   * probe re-runs — cache invalidation without bespoke invalidation code.
+   */
+  probeVersion: z.number().int(),
   ffmpegVersion: z.string().max(64).nullable(),
   probedAt: z.number().int(),
   /** How long the full probe took — used to decide whether to cache aggressively. */

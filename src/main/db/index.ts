@@ -3,6 +3,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync, copyFileSync, existsSync } from 'node:fs'
 import path from 'node:path'
 import { MIGRATIONS } from './migrations'
+import { log } from '@main/log'
 
 /**
  * Database bootstrap. node:sqlite (ADR-011) — synchronous, built into the
@@ -42,7 +43,7 @@ function migrate(d: DatabaseSync): void {
       try {
         copyFileSync(dbPath(), `${dbPath()}.pre-v${m.version}.bak`)
       } catch (e) {
-        console.warn('[db] pre-migration backup failed:', e)
+        log.warn('db', 'pre-migration backup failed', { error: String(e).slice(0, 300) })
       }
     }
     d.exec('BEGIN')
@@ -50,7 +51,7 @@ function migrate(d: DatabaseSync): void {
       d.exec(m.sql)
       d.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)').run(m.version, Date.now())
       d.exec('COMMIT')
-      console.log(`[db] migrated to v${m.version}`)
+      log.info('db', 'schema migrated', { version: m.version })
     } catch (e) {
       d.exec('ROLLBACK')
       throw e

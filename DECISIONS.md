@@ -262,3 +262,171 @@ would not protect against; BitLocker covers the same threat with fewer sharp edg
 **Consequences.** The Settings toggle does not ship in v1.0. Revisit when either node:sqlite
 gains an encryption story or the sqlite driver decision is revisited for other reasons.
 Partial-protection theater was the alternative, and Principle 5 rules it out.
+
+---
+
+## ADR-013 — A stage outcome carries a reason, reusing `error_code` rather than new columns
+
+**Date:** 2026-08-31 · **Status:** accepted
+
+**Context.** Every pipeline stage could return only `'done'` or `'skipped'`. That was enough for
+the queue and useless for the user: a meeting whose audio held no speech finished with
+`transcribe: done`, `summarize: skipped`, no failures, and an empty Library. The skip was correct
+behaviour and completely unexplained — and because the UI rendered `skipped` in the same bucket
+as `pending`, a finished pipeline was indistinguishable from a stuck one (M-023, M-024).
+Principle 5 says silent fallback is a bug; a reasonless skip is exactly that.
+
+**Options.**
+1. Add `outcome_code` / `outcome_detail` columns to `jobs`. Semantically clean — an outcome is
+   not an error — at the cost of a schema migration on the table that is under active repair, and
+   two more fields whose lifecycle must be kept in sync with the existing two.
+2. Reuse `error_code` / `error_detail` for skip reasons as well as failures.
+3. Encode the reason in the `state` enum (`skipped-no-audio`, `skipped-no-speech`, …). Rejected
+   immediately: it makes `state` unbounded and breaks every existing query that groups by it.
+
+**Decision.** Option 2. The deciding argument is lifecycle rather than taxonomy: `enqueue()` and
+`retry()` already null both columns, which is exactly the behaviour an outcome reason wants — a
+re-run must not inherit the previous run's explanation. New columns would have needed that same
+nulling added in both places, i.e. a second chance to get it wrong. The stage contract becomes
+`'done' | 'skipped' | { state, code?, detail? }`; the bare-string form keeps all seven existing
+stage bodies compiling untouched, so only the stages being taught to explain themselves changed.
+
+`PIPELINE_STAGE_FAILED` was already being written into `error_code` by the queue while not being
+declared in `ERROR_CODES` at all — the taxonomy's own contract was broken before this change.
+That is now fixed alongside the new codes.
+
+**Consequences.** `error_code` on a `skipped` row is a *reason*, not a failure; anything counting
+errors must filter on `state`, not on the column being non-null. The name is a mild lie and is
+commented as such at the write site. In exchange there is no migration, no second lifecycle to
+maintain, and the renderer gets one field to render. Codes are mapped to human sentences in
+`i18n.ts` — the raw code is never shown, since "PIPELINE_NO_SPEECH" explains nothing to a user.
+
+---
+
+## ADR-014 — Source toggles are UI state; ADR-007's track invariant is untouched
+
+**Date:** 2026-08-31 · **Status:** accepted
+
+**Context.** The user asked to switch the camera, the microphone and system audio on and off
+independently, and to still be able to use the microphone and system audio together. ADR-007
+states the invariant that mic and system audio are never mixed, with the layout
+`a:0` = mic, `a:1` = system. A toggle that can remove `a:0` looks, at first reading, like it
+breaks that.
+
+**It does not, and the code already knew.** The invariant is about ORDER, not absolute index —
+mic comes before system whenever both are present. `ffmpeg-builder.ts` has always computed input
+indices with running counters rather than constants, and `extract-audio.ts` derives the track
+index from the `has_mic` / `has_system_audio` columns with a comment saying exactly this. The
+prose in CLAUDE.md, CONTRIBUTING.md and docs/architecture.md states the stronger, absolute form,
+which was never what the code implemented. With the mic off, system audio is legitimately `a:0`.
+
+**Options.**
+1. Add an `enabled` flag to `CaptureConfigSchema` and teach the builder about it.
+2. Keep "off" as `null` on the existing nullable config fields, and hold the on/off decision in
+   renderer state only.
+3. Replace `microphone` + `systemAudio` with a single audio-source enum.
+
+**Decision.** Option 2. The wire format already models "off" as `null` for camera and microphone
+and as `false` for systemAudio, and every downstream consumer already derives indices rather than
+assuming them — so the entire feature is renderer state plus two lines in `buildConfig`. Option 1
+would add a second way to express the same thing (a device with `enabled: false`), and option 3
+would be a schema change rippling into the builder, the `has_mic`/`has_system_audio` columns and
+the extract stage, in exchange for expressing something the current shape already expresses.
+
+**Consequences.** `Selection` gains `cameraEnabled` and `microphoneEnabled` beside the device
+ids, because a single nullable id cannot carry both "which" and "whether" (M-027). Toggle state
+is deliberately NOT persisted across restarts — WebRTC device ids are salted per origin and can
+rotate, so persistence must match by label, and that is a separate change nobody asked for.
+The untested combination the invariant's prose made people nervous about — mic off, system on —
+is now pinned in `tests/unit/ffmpeg-builder.test.ts`, and the config mapping in
+`tests/unit/source-toggles.test.ts`. The prose in CLAUDE.md should be read as "mic before
+system", not "mic is always a:0".
+
+---
+
+## ADR-015 — The Q&A report is a manual stage over summarize's persisted notes
+
+**Date:** 2026-08-31 · **Status:** accepted
+
+**Context.** The user asked for an auto-generated FAQ-style Q&A report — the questions a
+colleague who missed the meeting would ask, each answered from what was said, with a timestamp to
+seek to — and explicitly chose a button over automatic generation.
+
+**Options for when it runs.**
+1. Append `qa` to PROCESSING_STAGES so every meeting gets one.
+2. Register the stage but keep it out of PROCESSING_STAGES; `qa:regenerate` enqueues it alone.
+
+**Decision: option 2.** On a 15 W laptop an unopened report is minutes of inference for nothing,
+and the user asked for the button. The stage is still a real queue stage, so it inherits retries,
+progress, crash-resume and the outcome codes from ADR-013 rather than becoming a second execution
+path.
+
+**Options for what it reads.**
+1. Re-chunk the transcript and run a fresh map-reduce — roughly doubles the summarize cost.
+2. Consume the map notes summarize already produced, persisted in that job's checkpoint.
+3. Read only the stored summary.
+
+**Decision: option 2, falling back to option 3.** `summarizeMeeting` now returns `allNotes` and
+the pipeline writes them to the summarize checkpoint after the summary is durably stored (the
+existing persist-then-checkpoint ordering). The Q&A stage reads them and makes ONE llama call
+instead of a second map-reduce. When the checkpoint is gone — an older meeting, or a re-run that
+cleared it per M-025 — it falls back to the stored summary, which carries the same decisions,
+action items and open questions in a smaller form. Both paths were exercised.
+
+Placement matters: `ensureLlm` is keyed on the model path, so a Q&A run reuses a warm qwen3-4b at
+zero reload cost, while the VLM stage swaps the model out.
+
+**Storage.** A new `qa_reports` table (migration v2) mirroring `summaries` shape-for-shape rather
+than a `kind` column on `summaries`. The column would have meant editing three load-bearing
+`WHERE is_current = 1` queries in the same release that repaired the summary path; a new table has
+zero blast radius and inherits cascade-delete and `is_current` versioning for free.
+
+**Trust in timestamps.** The probe showed the model reusing one fact's `[t=...]` on an unrelated
+answer. Every `t` is therefore snapped to a real transcript segment start within 30 s or discarded
+(`snapToSegment`), so an answer either seeks somewhere real or shows no button at all. A wrong
+seek costs more than a missing one: it teaches the user to distrust every timestamp on the page.
+
+**Consequences.** Nine badges per meeting now (including `publish`). The report is regenerated,
+never merged — pressing the button replaces the current row and retains the old one. The schema
+was probed with curl against qwen3-4b before the parser existed (M-015's rule), which is how the
+`minItems` requirement and all four prompt rules were found rather than guessed.
+
+---
+
+## ADR-016 — Filesystem paths may leave main in a response, never enter in a request
+
+**Date:** 2026-08-31 · **Status:** accepted
+
+**Context.** Recordings can now go to a folder the user picks. The obvious implementation — a text
+field or a renderer-side folder picker that sends the chosen path over IPC — collides with a hard
+invariant: *"No renderer-supplied filesystem path ever crosses IPC. The renderer sends IDs; main
+resolves paths."* But `settings:get` has always returned `modelsDir` and `recordingsDir`, which
+are also paths. The invariant needed reading precisely rather than being worked around.
+
+**Decision.** The invariant is **directional**.
+
+- A path in a **response** is fine and already established. It is main describing its own state to
+  a UI that only displays it; nothing is resolved from it.
+- A path in a **request** is forbidden. That is the renderer choosing what main touches, which is
+  the entire attack surface the rule exists to close (SECURITY.md T4).
+
+So `settings:chooseRecordingsFolder` takes `{}`. Main opens `dialog.showOpenDialog`, validates the
+result, and calls `patchSettings` itself. The renderer never sees a path until it comes back in
+the response, and never sends one. `settings:set` deliberately has **no** `recordingsDir` field,
+with a comment pointing here so nobody "completes" the schema later.
+
+**Validation before a folder is accepted** (in `platform/storage.ts`):
+a real write-then-delete probe, not `fs.access` — M-013's "existence is not integrity" applies to
+directories too, since a share can answer `stat` and refuse writes; rejection of app-internal
+locations (the models directory, the app path, `work/`), because recordings there would be
+deleted or overwritten by other features; and the same 5 GB floor the recording pre-flight uses.
+
+**Consequences.** Every stored `media_path` stays **relative** — to `userData` or to the chosen
+folder, recorded per meeting in `media_root` (migration v3). That is what keeps `resolveInside`
+meaningful; absolutising the column would have removed the containment guarantee entirely. All
+six resolution sites go through `resolveMedia()`, which picked up one free hardening:
+`meetings:delete` had been doing a bare `path.join` with **no containment check at all** before an
+`rmSync(recursive)` — the only media site in the codebase without one.
+
+Existing recordings are never moved. Bulk migration stays deferred (PROGRESS.md, post-1.0);
+`media_root` reduces it to a data operation whenever it is wanted.

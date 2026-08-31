@@ -13,6 +13,21 @@ export const SettingsSchema = z.object({
   language: z.enum(['en', 'bn', 'auto']).default('en'),
   autoProcess: z.boolean().default(true),
   keyframeSensitivity: z.enum(['sensitive', 'balanced', 'sparse']).default('balanced'),
+  /**
+   * Absolute folder for NEW recordings; null means userData/recordings.
+   *
+   * Deliberately NOT settable through `settings:set` — a filesystem path must
+   * never cross IPC in a REQUEST (CLAUDE.md). It is written only by the
+   * main-process folder-picker handler, which owns the dialog and validates the
+   * result. See ADR-016.
+   */
+  recordingsDir: z.string().max(500).nullable().default(null),
+  /**
+   * Write the transcript, summary and Q&A next to the .mkv, so the recording
+   * folder is readable without opening the app at all (Principle 6: open by
+   * default, no lock-in).
+   */
+  writeSidecarFiles: z.boolean().default(true),
 })
 export type AppSettings = z.infer<typeof SettingsSchema>
 

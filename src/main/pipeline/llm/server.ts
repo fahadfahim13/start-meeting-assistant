@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { createServer } from 'node:net'
 import { resolveBinary } from '@main/platform/binaries'
+import { log } from '@main/log'
 
 /**
  * llama-server lifecycle (plan §8.5.1). One server at a time — the machine is
@@ -29,6 +30,17 @@ interface Running {
 
 let running: Running | null = null
 let idleTimer: ReturnType<typeof setTimeout> | null = null
+/**
+ * Requests currently awaiting a reply.
+ *
+ * The idle unloader fires 5 minutes after the LAST touch, but `touchIdle()` is
+ * called when a request STARTS and a completion may run for up to 10 minutes
+ * (the fetch timeout). A long summarize call could therefore have its own
+ * server killed out from under it and fail with a fetch error that looked like
+ * a model problem. The window is real on a 15 W laptop, where a big reduce pass
+ * is exactly the call that takes longest.
+ */
+let inFlight = 0
 
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -48,7 +60,12 @@ function freePort(): Promise<number> {
 function touchIdle(): void {
   if (idleTimer) clearTimeout(idleTimer)
   idleTimer = setTimeout(() => {
-    console.log('[llm] idle — unloading model')
+    // Re-arm rather than unload while a request is still outstanding.
+    if (inFlight > 0) {
+      touchIdle()
+      return
+    }
+    log.info('llm', 'idle - unloading model')
     void stopLlm()
   }, IDLE_UNLOAD_MS)
 }
@@ -79,12 +96,21 @@ export async function ensureLlm(config: ServerConfig): Promise<{ port: number; a
     windowsHide: true,
     stdio: ['ignore', 'ignore', 'pipe'],
   })
-  child.stderr?.on('data', () => {
-    /* llama-server logs are noisy; health is checked via HTTP */
+  // A bounded ring, written to the log ONLY when the server fails. Discarding
+  // stderr entirely meant "did not become healthy in time" carried no
+  // diagnosis at all; keeping it always would risk model text reaching a log.
+  // llama-server's own startup lines are load/config diagnostics, not prompts.
+  const stderrTail: string[] = []
+  child.stderr?.on('data', (d: Buffer) => {
+    for (const line of String(d).split(/\r?\n/)) {
+      if (!line.trim()) continue
+      stderrTail.push(line.slice(0, 300))
+      if (stderrTail.length > 40) stderrTail.shift()
+    }
   })
   child.on('exit', (code) => {
     if (running?.child === child && code !== 0 && code !== null) {
-      console.error(`[llm] server exited ${code}`)
+      log.error('llm', 'server exited', { code, stderrTail: stderrTail.slice(-15) })
       running = null
     }
   })
@@ -94,7 +120,13 @@ export async function ensureLlm(config: ServerConfig): Promise<{ port: number; a
   // Wait for /health.
   const deadline = Date.now() + STARTUP_TIMEOUT_MS
   for (;;) {
-    if (child.exitCode !== null) throw new Error(`llama-server exited ${child.exitCode} during startup`)
+    if (child.exitCode !== null) {
+      log.error('llm', 'server exited during startup', {
+        code: child.exitCode,
+        stderrTail: stderrTail.slice(-15),
+      })
+      throw new Error(`llama-server exited ${child.exitCode} during startup`)
+    }
     try {
       const res = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(2000) })
       if (res.ok) break
@@ -102,6 +134,10 @@ export async function ensureLlm(config: ServerConfig): Promise<{ port: number; a
       /* not up yet */
     }
     if (Date.now() > deadline) {
+      log.error('llm', 'server did not become healthy in time', {
+        timeoutMs: STARTUP_TIMEOUT_MS,
+        stderrTail: stderrTail.slice(-15),
+      })
       await stopLlm()
       throw new Error('llama-server did not become healthy in time')
     }
@@ -128,6 +164,23 @@ export async function chat(input: {
   responseFormat?: object
 }): Promise<string> {
   touchIdle()
+  inFlight++
+  try {
+    return await doChat(input)
+  } finally {
+    inFlight--
+    // Restart the clock from the END of the request, not the start.
+    touchIdle()
+  }
+}
+
+async function doChat(input: {
+  server: { port: number; apiKey: string }
+  messages: ChatMessage[]
+  maxTokens: number
+  temperature?: number
+  responseFormat?: object
+}): Promise<string> {
   const res = await fetch(`http://127.0.0.1:${input.server.port}/v1/chat/completions`, {
     method: 'POST',
     headers: {
@@ -142,7 +195,15 @@ export async function chat(input: {
     }),
     signal: AbortSignal.timeout(10 * 60_000),
   })
-  if (!res.ok) throw new Error(`llm http ${res.status}: ${(await res.text()).slice(0, 300)}`)
+  if (!res.ok) {
+    // Deliberately NOT the response body. An error thrown here is caught by the
+    // queue, written into jobs.error_detail, and now also written to the log
+    // file — and a llama-server error body can echo the prompt, which is
+    // meeting content. "Transcript text, OCR text and LLM output are never
+    // written to logs" (CLAUDE.md) has no exception for error paths.
+    const body = await res.text().catch(() => '')
+    throw new Error(`llm http ${res.status} (${body.length} chars of body withheld)`)
+  }
   const body = (await res.json()) as {
     choices?: { message?: { content?: string }; finish_reason?: string }[]
   }

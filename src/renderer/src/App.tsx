@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useStore } from './store'
+import { enabledButUnavailable, useStore } from './store'
 import { api } from './api'
 import { startMeter, type MeterHandle } from './audio/meter'
 import Library from './features/Library'
@@ -10,6 +10,16 @@ function fmtBytes(n: number): string {
   if (n < 1024 ** 2) return `${(n / 1024).toFixed(0)} KB`
   if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`
   return `${(n / 1024 ** 3).toFixed(2)} GB`
+}
+
+/**
+ * Why there is no preview image, not just that there isn't one.
+ * `idle` = nothing selected / previews suspended, `empty` = the source exists
+ * but is minimised, `not-found` = it was closed, `error` = the IPC call failed.
+ */
+type PreviewState = {
+  kind: 'idle' | 'ok' | 'empty' | 'not-found' | 'error'
+  url: string | null
 }
 
 function fmtElapsed(ms: number): string {
@@ -64,32 +74,61 @@ export default function App(): React.JSX.Element {
   const recording = s.session?.state === 'recording'
   const paused = s.session?.state === 'paused'
   const inSession = recording || paused || s.session?.state === 'finalizing'
-  const [screenShot, setScreenShot] = useState<string | null>(null)
+  const [preview, setPreview] = useState<PreviewState>({ kind: 'idle', url: null })
+  // Keyed by content so a NEW set of warnings reappears after being dismissed.
+  const [dismissedWarnings, setDismissedWarnings] = useState('')
 
   // Live preview of the SELECTED screen/window — so what gets recorded (and
   // therefore what the summary is built from) is visible before pressing
-  // Record, not discovered afterwards. Refreshes every 2 s while idle.
+  // Record, not discovered afterwards.
   useEffect(() => {
     const id = s.selection.screenId
     // previewsSuspended matters here exactly like the camera preview (M-007):
     // a getSources thumbnail capture racing getDisplayMedia's loopback start
     // can leave the system-audio stream silent (M-020).
-    if (!id || inSession || s.previewsSuspended) {
-      setScreenShot(null)
+    if (!id || inSession || s.previewsSuspended || tab !== 'record') {
+      setPreview({ kind: 'idle', url: null })
       return
     }
     let alive = true
+    let timer: ReturnType<typeof setInterval> | null = null
+
     const grab = async (): Promise<void> => {
       const r = await api.invoke('devices:screenPreview', { sourceId: id })
-      if (alive && r.ok) setScreenShot(r.data.thumbnailDataUrl)
+      if (!alive) return
+      if (!r.ok) {
+        // Never keep the last good image on failure. A stale thumbnail is worse
+        // than none: it shows a window that may already be closed and quietly
+        // contradicts what is about to be recorded.
+        setPreview({ kind: 'error', url: null })
+        return
+      }
+      if (r.data.status === 'ok') setPreview({ kind: 'ok', url: r.data.thumbnailDataUrl })
+      else setPreview({ kind: r.data.status, url: null })
     }
-    void grab()
-    const timer = setInterval(() => void grab(), 2000)
+
+    // Poll only while this window is actually on screen. Previously it polled
+    // every 2 s even while minimised, which is how an idle app generated a
+    // continuous stream of desktop captures on a 15 W laptop.
+    const sync = (): void => {
+      const shouldPoll = document.visibilityState === 'visible'
+      if (shouldPoll && timer === null) {
+        void grab()
+        timer = setInterval(() => void grab(), 5000)
+      } else if (!shouldPoll && timer !== null) {
+        clearInterval(timer)
+        timer = null
+      }
+    }
+    sync()
+    document.addEventListener('visibilitychange', sync)
+
     return () => {
       alive = false
-      clearInterval(timer)
+      if (timer !== null) clearInterval(timer)
+      document.removeEventListener('visibilitychange', sync)
     }
-  }, [s.selection.screenId, inSession, s.previewsSuspended])
+  }, [s.selection.screenId, inSession, s.previewsSuspended, tab])
 
   // Camera preview — WebRTC, entirely separate from the ffmpeg path, and torn
   // down the moment recording starts: cameras are EXCLUSIVE devices, and a
@@ -98,7 +137,7 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     let stream: MediaStream | null = null
     const el = videoRef.current
-    if (!s.selection.cameraDeviceId || !el || recording || s.previewsSuspended) return
+    if (!s.selection.cameraEnabled || !s.selection.cameraDeviceId || !el || recording || s.previewsSuspended) return
     void navigator.mediaDevices
       .getUserMedia({ video: { deviceId: { exact: s.selection.cameraDeviceId } } })
       .then((st) => {
@@ -112,7 +151,7 @@ export default function App(): React.JSX.Element {
       if (el) el.srcObject = null
       stream?.getTracks().forEach((t) => t.stop())
     }
-  }, [s.selection.cameraDeviceId, recording, s.previewsSuspended])
+  }, [s.selection.cameraDeviceId, s.selection.cameraEnabled, recording, s.previewsSuspended])
 
   // Mic level meter — released during recording for the same reason. WASAPI
   // shared mode often tolerates two mic readers, but "often" is not a design.
@@ -120,7 +159,7 @@ export default function App(): React.JSX.Element {
     let meter: MeterHandle | null = null
     let stream: MediaStream | null = null
     let timer: ReturnType<typeof setInterval> | null = null
-    if (!s.selection.microphoneDeviceId || recording || s.previewsSuspended) {
+    if (!s.selection.microphoneEnabled || !s.selection.microphoneDeviceId || recording || s.previewsSuspended) {
       setMicLevel(0)
       return
     }
@@ -137,8 +176,10 @@ export default function App(): React.JSX.Element {
       meter?.stop()
       stream?.getTracks().forEach((t) => t.stop())
     }
-  }, [s.selection.microphoneDeviceId, recording, s.previewsSuspended])
+  }, [s.selection.microphoneDeviceId, s.selection.microphoneEnabled, recording, s.previewsSuspended])
   const inv = s.inventory
+  // Sources switched ON that the recorder cannot actually address.
+  const unavailable = enabledButUnavailable(s)
 
   return (
     <div className="app">
@@ -220,11 +261,21 @@ export default function App(): React.JSX.Element {
             </div>
           </label>
 
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={s.selection.cameraEnabled}
+              disabled={inSession}
+              onChange={(e) => s.select({ cameraEnabled: e.target.checked })}
+            />
+            {t.setup.cameraEnabled}
+          </label>
+
           <label>
             {t.setup.camera}
             <select
               value={s.selection.cameraDeviceId ?? ''}
-              disabled={inSession}
+              disabled={inSession || !s.selection.cameraEnabled}
               onChange={(e) => s.select({ cameraDeviceId: e.target.value || null })}
             >
               <option value="">{t.setup.none}</option>
@@ -238,11 +289,21 @@ export default function App(): React.JSX.Element {
             </select>
           </label>
 
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={s.selection.microphoneEnabled}
+              disabled={inSession}
+              onChange={(e) => s.select({ microphoneEnabled: e.target.checked })}
+            />
+            {t.setup.microphoneEnabled}
+          </label>
+
           <label>
             {t.setup.microphone}
             <select
               value={s.selection.microphoneDeviceId ?? ''}
-              disabled={inSession}
+              disabled={inSession || !s.selection.microphoneEnabled}
               onChange={(e) => s.select({ microphoneDeviceId: e.target.value || null })}
             >
               <option value="">{t.setup.none}</option>
@@ -286,17 +347,46 @@ export default function App(): React.JSX.Element {
 
         <section className="panel preview" aria-label="Preview">
           <h2>{t.preview.heading}</h2>
-          {screenShot ? (
+          {preview.kind === 'ok' && preview.url ? (
             <>
-              <img src={screenShot} alt="Selected screen preview" className="screen-preview" />
+              <img src={preview.url} alt="Selected screen preview" className="screen-preview" />
               <p className="preview-note">{t.preview.screenLabel}</p>
             </>
+          ) : preview.kind === 'not-found' ? (
+            <p className="preview-note warn-note">{t.preview.sourceGone}</p>
+          ) : preview.kind === 'empty' ? (
+            <p className="preview-note warn-note">{t.preview.sourceMinimized}</p>
+          ) : preview.kind === 'error' ? (
+            <p className="preview-note warn-note">{t.preview.previewFailed}</p>
           ) : (
             !inSession && s.selection.screenId === null && <p className="preview-note warn-note">{t.preview.noScreen}</p>
           )}
-          <video ref={videoRef} autoPlay muted playsInline className="camera-preview" />
-          <Meter level={micLevel} label={t.preview.mic} />
-          <Meter level={s.systemLevel} label={t.preview.system} />
+          {/* A black rectangle and a dead grey meter are indistinguishable from
+              a broken camera and a silent microphone. An OFF source says so. */}
+          {s.selection.cameraEnabled && s.selection.cameraDeviceId ? (
+            <video ref={videoRef} autoPlay muted playsInline className="camera-preview" />
+          ) : (
+            <p className="preview-note source-off">{t.preview.cameraOff}</p>
+          )}
+          {s.selection.microphoneEnabled && s.selection.microphoneDeviceId ? (
+            <Meter level={micLevel} label={t.preview.mic} />
+          ) : (
+            <p className="preview-note source-off" aria-label={t.preview.micOff}>
+              {t.preview.micOff}
+            </p>
+          )}
+          {s.selection.systemAudio ? (
+            <Meter level={s.systemLevel} label={t.preview.system} />
+          ) : (
+            <p className="preview-note source-off" aria-label={t.preview.systemOff}>
+              {t.preview.systemOff}
+            </p>
+          )}
+          {unavailable.map((label) => (
+            <div key={label} className="messages error" role="alert">
+              <p>✕ {t.preview.deviceUnavailable(label)}</p>
+            </div>
+          ))}
 
           {s.validation && !s.validation.ok && (
             <div className="messages error" role="alert">
@@ -325,6 +415,27 @@ export default function App(): React.JSX.Element {
         </section>
       </main>
       )}
+
+      {(() => {
+        // Post-recording findings (M-023). Shown here rather than in the footer
+        // because these are full sentences the user has to act on — a silent
+        // system-audio track means the transcript will be empty, and that is
+        // worth interrupting for while they still remember the setup.
+        const warnings = s.session?.warnings ?? []
+        const key = warnings.join('|')
+        if (warnings.length === 0 || key === dismissedWarnings) return null
+        return (
+          <div className="messages warn recording-warnings" role="status">
+            <strong>{t.controls.recordingIssues}</strong>
+            {warnings.map((w) => (
+              <p key={w}>⚠ {w}</p>
+            ))}
+            <button className="ghost small" onClick={() => setDismissedWarnings(key)}>
+              {t.controls.dismiss}
+            </button>
+          </div>
+        )
+      })()}
 
       <footer className="controls">
         <div className="status" aria-live="polite">

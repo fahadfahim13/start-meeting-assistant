@@ -98,6 +98,14 @@ export const SessionStatusSchema = z.object({
   pcmBackpressure: z.number().int().min(0),
   encoderInUse: z.string().max(32).nullable(),
   error: z.string().max(2000).nullable(),
+  /**
+   * Non-fatal findings about the recording that just finished — chiefly a track
+   * that captured silence (M-020/M-023). The recording is fine and saved; the
+   * user needs to know BEFORE they close the app and lose the context, because
+   * the alternative is discovering an empty transcript an hour later with no
+   * explanation. Principle 5.
+   */
+  warnings: z.array(z.string().max(500)).max(5),
 })
 export type SessionStatus = z.infer<typeof SessionStatusSchema>
 

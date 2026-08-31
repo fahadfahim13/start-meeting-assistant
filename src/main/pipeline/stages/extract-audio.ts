@@ -2,24 +2,26 @@ import { execFile } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { resolveBinary } from '@main/platform/binaries'
+import { classifyLevel, parseVolumeDetect, type AudioLevel } from '@shared/audio-levels'
 
 /**
  * Extract each audio track as 16 kHz mono WAV for transcription, with EBU R128
  * loudness normalization to stabilize Whisper input levels (plan §8.3.1).
- * Also measures each track's mean volume so downstream stages can skip
- * transcribing digital silence — many meetings are mic-only or system-only,
- * and running Whisper over silence wastes half the pipeline time.
+ *
+ * Also measures each track's real level so a later empty transcript can be
+ * EXPLAINED rather than merely observed. The measurement used to run after
+ * loudnorm, which meant it measured loudnorm's output and reported a
+ * near-silent microphone as a healthy -19.8 dB — see MISTAKES.md M-023.
  */
 
 export interface ExtractedTrack {
   track: 'mic' | 'system'
   wavPath: string
   meanVolumeDb: number | null
-  /** Below -70 dB mean is effectively silence — not worth transcribing. */
-  isSilent: boolean
+  maxVolumeDb: number | null
+  /** Shared classifier — the capture session reaches the same verdict. */
+  level: AudioLevel
 }
-
-const SILENCE_MEAN_DB = -70
 
 function run(args: string[]): Promise<{ ok: boolean; stderr: string }> {
   return new Promise((resolve) => {
@@ -43,19 +45,23 @@ async function extractOne(
     '-loglevel', 'info', '-y',
     '-i', mediaPath,
     '-map', streamSpec,
-    '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11,volumedetect',
+    // ORDER IS LOAD-BEARING (M-023): volumedetect is pass-through and prints at
+    // EOF, so putting it FIRST measures the decoded input while loudnorm still
+    // normalises what gets written. Reversed, the meter reports the
+    // normaliser's opinion and nothing is ever quiet.
+    '-af', 'volumedetect,loudnorm=I=-16:TP=-1.5:LRA=11',
     '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le',
     wavPath,
   ])
   if (!res.ok) return null
 
-  const m = /mean_volume:\s*(-?[\d.]+)\s*dB/.exec(res.stderr)
-  const meanVolumeDb = m ? parseFloat(m[1]!) : null
+  const levels = parseVolumeDetect(res.stderr)
   return {
     track,
     wavPath,
-    meanVolumeDb,
-    isSilent: meanVolumeDb !== null && meanVolumeDb < SILENCE_MEAN_DB,
+    meanVolumeDb: levels.meanVolumeDb,
+    maxVolumeDb: levels.maxVolumeDb,
+    level: classifyLevel(levels),
   }
 }
 

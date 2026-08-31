@@ -18,6 +18,9 @@ interface SettingsData {
   keyframeSensitivity: 'sensitive' | 'balanced' | 'sparse'
   modelsDir: string
   recordingsDir: string
+  recordingsDirIsDefault: boolean
+  recordingsDirWritable: boolean
+  writeSidecarFiles: boolean
   models: ModelRow[]
   vulkan: boolean
 }
@@ -38,6 +41,7 @@ export default function Settings(): React.JSX.Element {
   const [data, setData] = useState<SettingsData | null>(null)
   const [saved, setSaved] = useState(false)
   const [progress, setProgress] = useState<Record<string, DlProgress>>({})
+  const [folderMsg, setFolderMsg] = useState<string | null>(null)
 
   const load = async (): Promise<void> => {
     const r = await api.invoke('settings:get', {})
@@ -63,7 +67,14 @@ export default function Settings(): React.JSX.Element {
     }
   }
 
-  const patch = async (p: Partial<Pick<SettingsData, 'defaultPreset' | 'language' | 'autoProcess' | 'keyframeSensitivity'>>): Promise<void> => {
+  const patch = async (
+    p: Partial<
+      Pick<
+        SettingsData,
+        'defaultPreset' | 'language' | 'autoProcess' | 'keyframeSensitivity' | 'writeSidecarFiles'
+      >
+    >,
+  ): Promise<void> => {
     await api.invoke('settings:set', p)
     setSaved(true)
     setTimeout(() => setSaved(false), 1500)
@@ -93,7 +104,59 @@ export default function Settings(): React.JSX.Element {
           />
           {t.settings.autoProcess}
         </label>
-        <p className="hint">{t.settings.recordingsFolder} <code>{data.recordingsDir}</code></p>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={data.writeSidecarFiles}
+            onChange={(e) => void patch({ writeSidecarFiles: e.target.checked })}
+          />
+          {t.settings.sidecarFiles}
+        </label>
+        <div className="folder-row">
+          <p className="hint">
+            {t.settings.recordingsFolder} <code>{data.recordingsDir}</code>
+          </p>
+          <div className="folder-actions">
+            <button
+              className="ghost small"
+              onClick={() => {
+                // The renderer asks for a picker; main owns the dialog and the
+                // path. No filesystem path is ever sent from here (ADR-016).
+                void api.invoke('settings:chooseRecordingsFolder', {}).then((r) => {
+                  if (!r.ok) return
+                  if (r.data.ok && r.data.path) {
+                    setFolderMsg(t.settings.folderChanged(r.data.path))
+                    void load()
+                  } else if (r.data.reason) {
+                    setFolderMsg(r.data.reason)
+                  }
+                })
+              }}
+            >
+              {t.settings.changeFolder}
+            </button>
+            {!data.recordingsDirIsDefault && (
+              <button
+                className="ghost small"
+                onClick={() => {
+                  void api.invoke('settings:resetRecordingsFolder', {}).then((r) => {
+                    if (r.ok) {
+                      setFolderMsg(t.settings.folderReset)
+                      void load()
+                    }
+                  })
+                }}
+              >
+                {t.settings.useDefaultFolder}
+              </button>
+            )}
+          </div>
+        </div>
+        <p className="hint">{t.settings.folderNote}</p>
+        {!data.recordingsDirWritable && (
+          <p className="messages warn">{t.settings.folderUnwritable}</p>
+        )}
+        {folderMsg && <p className="export-msg">{folderMsg}</p>}
       </section>
 
       <section className="panel">

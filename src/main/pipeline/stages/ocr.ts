@@ -3,6 +3,7 @@ import path from 'node:path'
 import { createWorker, type Worker } from 'tesseract.js'
 import { modelsDir } from '@main/platform/models'
 import { getDb } from '@main/db'
+import { log } from '@main/log'
 
 /**
  * OCR over keyframes (plan §8.4.3) — tier 1 of visual analysis: for
@@ -71,7 +72,7 @@ export async function ocrKeyframes(input: {
         withText++
       }
     } catch (e) {
-      console.warn(`[ocr] keyframe ${row.id} failed:`, String(e).slice(0, 200))
+      log.warn('ocr', 'keyframe failed', { keyframeId: row.id, error: String(e).slice(0, 200) })
     }
     input.onProgress(Math.round(((i + 1) / rows.length) * 100))
   }

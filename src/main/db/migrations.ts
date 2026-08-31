@@ -160,4 +160,37 @@ CREATE TABLE models (
 );
 `,
   },
+  {
+    version: 2,
+    sql: `
+-- Q&A reports: the questions a colleague who missed the meeting would ask.
+-- Deliberately its own table rather than a 'kind' column on summaries: that
+-- would have meant editing three load-bearing "WHERE is_current = 1" queries
+-- in the same release that repaired the summary path. Same shape otherwise, so
+-- versioning and cascade-delete behave identically.
+CREATE TABLE qa_reports (
+  id           TEXT PRIMARY KEY,
+  meeting_id   TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  model        TEXT NOT NULL,
+  prompt_hash  TEXT NOT NULL,
+  content      TEXT NOT NULL,        -- {pairs:[{q,a,t}], degraded}
+  generated_at INTEGER NOT NULL,
+  is_current   INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX idx_qa_reports_meeting ON qa_reports(meeting_id, is_current);
+`,
+  },
+  {
+    version: 3,
+    sql: `
+-- Which root a meeting's media_path is relative to: the sentinel 'userData',
+-- or the ABSOLUTE folder that was configured when the recording was made.
+-- media_path itself stays RELATIVE (the schema comment above is load-bearing:
+-- a relative path is what the containment guard can contain). Storing the real
+-- root rather than a 'custom' marker is what keeps a recording resolvable
+-- after the setting is changed or reset - a marker made resolution depend on
+-- the CURRENT setting and orphaned everything recorded under the old folder.
+ALTER TABLE meetings ADD COLUMN media_root TEXT NOT NULL DEFAULT 'userData';
+`,
+  },
 ]

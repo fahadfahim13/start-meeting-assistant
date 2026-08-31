@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
+import { log } from '@main/log'
 
 /**
  * Bundled-binary integrity (SECURITY.md T7). The manifest is generated at
@@ -54,10 +55,10 @@ function finish(ok: boolean, problems: string[]): { ok: boolean; problems: strin
   if (!ok) {
     if (app.isPackaged) {
       // T7: refuse to run with tampered binaries. The user reinstalls.
-      console.error('[integrity] FATAL — bundled binaries failed verification:', problems)
+      log.error('integrity', 'FATAL - bundled binaries failed verification', { problems })
       app.exit(13)
     } else {
-      console.warn('[integrity] dev warning — binaries differ from manifest:', problems.slice(0, 5))
+      log.warn('integrity', 'dev warning - binaries differ from manifest', { problems: problems.slice(0, 5) })
     }
   }
   return { ok, problems }

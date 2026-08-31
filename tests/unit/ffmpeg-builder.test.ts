@@ -7,6 +7,7 @@ const caps = (encoders: Capabilities['workingEncoders']): Capabilities => ({
   workingEncoders: encoders,
   ddagrabWorks: true,
   gdigrabWorks: true,
+  probeVersion: 2,
   ffmpegVersion: '8.1.1',
   probedAt: 0,
   probeDurationMs: 0,
@@ -15,7 +16,7 @@ const caps = (encoders: Capabilities['workingEncoders']): Capabilities => ({
 const fullConfig: CaptureConfig = {
   title: 'test',
   preset: 'balanced',
-  screen: { sourceId: 'screen:0:0', kind: 'screen', displayIndex: 0, windowTitle: null },
+  screen: { sourceId: 'screen:0:0', kind: 'screen', displayIndex: 0, windowTitle: null, label: null },
   camera: { dshowName: 'HP TrueVision HD Camera' },
   microphone: { dshowName: 'Microphone Array (AMD Audio Device)' },
   systemAudio: true,
@@ -89,18 +90,117 @@ describe('buildCaptureArgs', () => {
     expect(args.join(' ')).not.toContain('pipe')
   })
 
+  const windowConfig: CaptureConfig = {
+    ...fullConfig,
+    screen: {
+      sourceId: 'window:1:0',
+      kind: 'window',
+      displayIndex: null,
+      windowTitle: 'My Window',
+      label: 'My Window',
+    },
+  }
+
   it('window capture uses gdigrab with the window title', () => {
     const { args } = buildCaptureArgs({
-      config: {
-        ...fullConfig,
-        screen: { sourceId: 'window:1:0', kind: 'window', displayIndex: null, windowTitle: 'My Window' },
-      },
+      config: windowConfig,
       capabilities: caps(['h264_amf']),
       output: { kind: 'single' as const, path: 'C:/out/x.mkv' },
       pcmPipePath: '\\\\.\\pipe\\test',
     })
     expect(args).toContain('gdigrab')
     expect(args).toContain('title=My Window')
+  })
+
+  // M-021 regression pin. A minimised window is captured by gdigrab at its tiny
+  // restored-down size (measured: 181x25); h264_amf refuses anything under
+  // 128x128 and the ENTIRE recording died with `frame= 0 … Conversion failed!`.
+  // The old code mapped gdigrab's output raw, so nothing could rescue it.
+  it('pads a window chain up to the h264_amf floor instead of mapping it raw', () => {
+    const { args } = buildCaptureArgs({
+      config: windowConfig,
+      capabilities: caps(['h264_amf']),
+      output: { kind: 'single' as const, path: 'C:/out/x.mkv' },
+      pcmPipePath: '\\\\.\\pipe\\test',
+    })
+    const filter = args[args.indexOf('-filter_complex') + 1]!
+    expect(filter).toContain('pad=')
+    expect(filter).toContain('128')
+    expect(filter).toContain('[vscreen]')
+
+    const maps = args.filter((_, i) => args[i - 1] === '-map')
+    expect(maps).toContain('[vscreen]')
+    // The raw `N:v` mapping is the exact shape that let gdigrab reach the
+    // encoder unpadded. It must not come back for any video source.
+    expect(maps.some((m) => /^\d+:v$/.test(m))).toBe(false)
+  })
+
+  it('pads the gdigrab desktop fallback too, not just window capture', () => {
+    const { args } = buildCaptureArgs({
+      config: fullConfig,
+      capabilities: { ...caps(['h264_amf']), ddagrabWorks: false },
+      output: { kind: 'single' as const, path: 'C:/out/x.mkv' },
+      pcmPipePath: '\\\\.\\pipe\\test',
+    })
+    expect(args).toContain('desktop')
+    const filter = args[args.indexOf('-filter_complex') + 1]!
+    expect(filter).toContain('pad=')
+    expect(args.filter((_, i) => args[i - 1] === '-map')).toContain('[vscreen]')
+  })
+
+  it('gives a gdigrab window yuv420p when the encoder is libx264', () => {
+    const { args } = buildCaptureArgs({
+      config: windowConfig,
+      capabilities: caps(['libx264']),
+      output: { kind: 'single' as const, path: 'C:/out/x.mkv' },
+      pcmPipePath: '\\\\.\\pipe\\test',
+    })
+    const filter = args[args.indexOf('-filter_complex') + 1]!
+    expect(filter).toContain('format=yuv420p[vscreen]')
+  })
+
+  // The a:0/a:1 invariant is about ORDER, not absolute index: with the mic off,
+  // system audio legitimately becomes a:0. This combination was untested and is
+  // the one an on/off toggle is most likely to break.
+  it('makes system audio track a:0 when the microphone is disabled', () => {
+    const { args, trackLayout } = buildCaptureArgs({
+      config: { ...fullConfig, microphone: null },
+      capabilities: caps(['h264_amf']),
+      output: { kind: 'single' as const, path: 'C:/out/x.mkv' },
+      pcmPipePath: '\\\\.\\pipe\\test',
+    })
+    expect(trackLayout.mic).toBe(false)
+    expect(trackLayout.system).toBe(true)
+    expect(args.filter((_, i) => args[i - 1] === '-map')).toContain('0:a')
+    expect(args).toContain('title=System Audio')
+    expect(args).not.toContain('title=Microphone')
+    expect(args.join(' ')).not.toContain('-f dshow -thread_queue_size 4096')
+  })
+
+  it('drops the audio encoder entirely when both audio sources are off', () => {
+    const { args, trackLayout } = buildCaptureArgs({
+      config: { ...fullConfig, microphone: null, systemAudio: false },
+      capabilities: caps(['h264_amf']),
+      output: { kind: 'single' as const, path: 'C:/out/x.mkv' },
+      pcmPipePath: null,
+    })
+    expect(trackLayout.mic).toBe(false)
+    expect(trackLayout.system).toBe(false)
+    expect(args).not.toContain('-c:a')
+  })
+
+  it('omits the camera chain when the camera is off', () => {
+    const { args, trackLayout } = buildCaptureArgs({
+      config: { ...fullConfig, camera: null },
+      capabilities: caps(['h264_amf']),
+      output: { kind: 'single' as const, path: 'C:/out/x.mkv' },
+      pcmPipePath: '\\\\.\\pipe\\test',
+    })
+    expect(trackLayout.camera).toBe(false)
+    const filter = args[args.indexOf('-filter_complex') + 1]!
+    expect(filter).not.toContain('[vcam]')
+    expect(args.filter((_, i) => args[i - 1] === '-map')).not.toContain('[vcam]')
+    expect(args).not.toContain('title=Camera')
   })
 
   it('throws CAPTURE_ENCODER_FAILED when no encoder works', () => {

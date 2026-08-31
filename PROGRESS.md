@@ -195,6 +195,119 @@ CodeQL + SBOM run in CI (configured Phase 0); first live run happens when the re
 
 ---
 
+## Post-v0.1.0 repair — reported 2026-08-31 ("summary and transcript is not working")
+
+Driven by four real recordings made on 2026-08-31. Full plan and evidence in the approved
+repair plan; root causes in MISTAKES.md M-021/M-022/M-023.
+
+### Phase A — recording correctness | ✅ done, verified
+
+| Task | Status | Notes |
+|---|---|---|
+| A1 · every video source goes through a filter chain; gdigrab pads to the h264_amf 128×128 floor | ✅ | M-021. Window capture died at `frame= 0`; a minimised window is captured at 181×25 and AMF refuses it. Verified with the full production argv: `frame=75`, 182×128, audio intact |
+| A2 · gdigrab probed through the encoder production actually picks | ✅ | was `gdigrab → libx264` while production ran `gdigrab → h264_amf`. `probeVersion` on `CapabilitiesSchema` invalidates every stale cache structurally |
+| A3 · window title re-resolved from its stable source id at start | ✅ | gdigrab matches `title=` exactly; a spinner or unread badge loses the window. Missing source now errors by name instead of recording nothing. Minimised windows warn |
+| A4 · capture failures reach the structured log | ✅ | M-022. Two dead recordings had produced a one-line log file. Also fixed `log.write` letting a caller's field overwrite the log envelope |
+| A5 · audio levels measured at stop, silence surfaced to the user | ✅ | M-023 classifier shared with the pipeline; warning banner appears before the user closes the app |
+
+### Phase D — preview | ✅ done, verified
+
+| Task | Status | Notes |
+|---|---|---|
+| D1 · `getSources` narrowed by source kind | ✅ | was capturing a thumbnail of every window every 2 s to pick one. WGC `E_INVALIDARG` spam: 68 errors / 133 s → 3 for a whole run (one device enumeration) |
+| D2 · poll only while visible and on the Record tab, 2 s → 5 s | ✅ | it polled while minimised |
+| D3 · every preview state renders a sentence; no stale thumbnail on failure | ✅ | "sometimes previews are missing" was the null-with-no-message path |
+
+### Phase B — pipeline honesty | ✅ done, verified
+
+| Task | Status | Notes |
+|---|---|---|
+| B1 · silence gate measures the signal, not loudnorm's output | ✅ | M-023. Same file: mic read −19.8 dB before, −53.5 dB after. Shared classifier with capture |
+| B2 · stage outcomes carry a reason | ✅ | ADR-013. `StageOutcome` widened; every bare `skipped` now has a code. `PIPELINE_STAGE_FAILED` was being written but never declared — fixed |
+| B3 · zero-segment honesty + data-loss fix | ✅ | M-024. `replaceTrackSegments` guarded: a re-run recognising nothing used to DELETE a good transcript |
+| B4 · re-run clears the checkpoint | ✅ | M-025. `enqueue`/`retry` discard, `resetInterrupted` preserves — three paths, three intents |
+| B5 · terminal `publish` stage owns cleanup | ✅ | M-025. Was in diarize's unconditional `finally`, so any skip destroyed the WAVs |
+| B6 · job id + error code/detail cross IPC | ✅ | `jobs:retry` had zero callers because no job id ever reached the renderer. `error_detail` path-redacted |
+| B7 · UI tells the truth | ✅ | `skipped` has its own badge; reason sentences under each meeting; Re-process always available; Regenerate no longer hidden when there is no summary; job events patch one row instead of re-querying 100 meetings per tick |
+| B8 · `autoProcess` actually consulted | ✅ | defined, written by Settings, read by nothing |
+| A4 completion · `no-console` enforced for `src/main/**` | ✅ | M-022's rule made mechanical; 25 remaining call sites converted. Zod issues and LLM/JSON error text deliberately not logged |
+
+Verification: `npm run test:honesty` (new) — synthetic silence and tone cases assert on outcome
+**codes**, no mic/speakers/focus needed. ALL PASS. 129 unit tests green, typecheck clean.
+### Lint cleanup | ✅ done — and it was hiding a real bug
+
+`npm run lint` had been red on `main` with 15 errors. Clearing them found **M-026**: the six
+`no-control-regex` errors in `vlm.ts` were not pedantry — the source held literal backspace bytes
+(0x08) where `` was intended, and the alternation was ungrouped, so *every* scene-keyword group
+had a dead first and last keyword while its middle entries matched inside longer words
+("powerpointless" classified as a slide; "a slide about budget" did not). Scene classification has
+been wrong since Phase 5; the visual E2E never caught it because it asserts on captions, not
+scene types. Keyword table + `parseReply` extracted to a pure `stages/vlm-scene.ts` — it had been
+untestable because it lived beside an `electron` import, which is why it survived.
+
+Lint is now **0 errors**. Remaining fixes were unused vars in scripts and a `.cjs` require
+override for the electron-builder hook.
+
+### Phase C — independent source toggles | ✅ done, verified
+
+| Task | Status | Notes |
+|---|---|---|
+| C1 · "enabled" split from "chosen" | ✅ | M-027. `null` meant both "off" and "not picked", so Refresh silently re-enabled the camera. Seeds once from `cameraEnabledDefault` — a field unread since Phase 1 |
+| C2 · silent device downgrade surfaced | ✅ | an enabled source whose `dshowName` never reconciled produced no track and said nothing. Now an error in the preview; `select()` auto-validates on a 400 ms debounce |
+| C3 · off-state UI is honest | ✅ | a black `<video>` and a dead meter read as broken hardware. Off sources render a sentence with their own aria-label |
+| C4 · `tests/**` typechecked | ✅ | new `tsconfig.test.json` wired into `npm run typecheck`; fixtures could previously drift from the schemas they claim to pin |
+| — · `buildConfig` extracted to pure `capture-config.ts` | ✅ | it lived beside an `api` import that touches `window`, so it could not be imported by a test. Same root cause as M-026 |
+
+ADR-014 records why this needed no schema change: **ADR-007 is about track ORDER, not absolute
+index** — the code always computed indices dynamically; only the prose said otherwise. Mic off →
+system audio is legitimately `a:0`, now pinned by tests.
+
+Verification: lint 0 errors · typecheck (3 projects) clean · **146 unit tests** · live 12 s
+recording still yields 2 video + 2 audio on the default all-on path.
+
+### Phase E — Q&A report | ✅ done, verified on a real meeting
+
+Runs from a button (ADR-015), not as part of automatic processing.
+
+| Task | Status | Notes |
+|---|---|---|
+| E1 · consumes summarize's persisted map notes | ✅ | one llama call instead of a second map-reduce; falls back to the stored summary when the checkpoint is gone |
+| E2 · zod + mirrored json_schema, probed with curl first | ✅ | M-015's rule. The probe is what found `minItems` (the model returned ONE pair without it) and all four prompt rules |
+| E3 · timestamps snapped to real segments or dropped | ✅ | the probe caught the model reusing one fact's `t` on an unrelated answer. A wrong seek costs more than a missing one |
+| E4 · `qa_reports` table, migration v2 | ✅ | own table, not a `kind` column — zero blast radius on the summary queries |
+| E5 · `qa:get` / `qa:regenerate` / `qa:export` | ✅ | export copies `transcript:export` exactly: renderer names a format, main owns the save dialog. ipc-fuzz covers all three |
+| E6 · third Library tab | ✅ | question, answer, click-to-seek when the timestamp survived snapping; degraded banner; md/txt/json export |
+| E7 · llama-server lifecycle | ✅ | M-029: idle unloader could kill a model mid-answer (5 min idle vs 10 min request). Bounded stderr ring, logged only on failure |
+| — · `cleanAnswer` strips leaked markers | ✅ | M-028: the model writes `t=19400` into the prose as well as the field |
+
+Verification: `npm run test:qa` on a real 20-segment meeting — 6 content assertions, ALL PASS,
+report not degraded. lint 0 · typecheck (3 projects) · **172 unit tests**.
+
+### Phase F — storage location + sidecar files | ✅ done, verified
+
+| Task | Status | Notes |
+|---|---|---|
+| F1/F2 · `media_root` per meeting, migration v3 | ✅ | applied to the live DB; all 56 existing meetings keep `userData` and resolve unchanged, `.pre-v3.bak` written. `media_path` stays RELATIVE — absolutising it would have destroyed the containment guarantee |
+| F2 · all six resolution sites via `resolveMedia()` | ✅ | free hardening: `meetings:delete` had a bare `path.join` with **no containment check** before an `rmSync(recursive)` — the only media site without one |
+| F3 · folder picker without breaking the IPC invariant | ✅ | ADR-016: paths may leave main in a *response*, never enter in a *request*. Write-probe validation (not `fs.access`), app-internal folders refused, 5 GB floor |
+| F4 · existing recordings never move | ✅ | the setting governs new recordings only; bulk migration stays deferred |
+| F5 · sidecars beside the `.mkv` | ✅ | `.md`/`.srt`/`.json` transcript + `.summary.md` + `.qa.md`. Verified: all five written, `.srt` validated by ffprobe (`format_name=srt`). Toggleable in Settings |
+| F6 · folder disappears | ✅ | pre-flight is a **blocking error**; mid-recording, 3 consecutive failed disk probes (30 s) → `stop()` to salvage. A single transient statfs stays harmless |
+| — · `media_root` stores the real folder, not a marker | ✅ | **M-031**: a `'custom'` marker made resolution depend on the CURRENT setting, so resetting the folder orphaned everything recorded under the old one — unplayable *and* undeletable. Found by the bulk delete, not by a unit test |
+| — · harness integrity | ✅ | **M-030**: a stray Electron holds the single-instance lock, so a launch exits **0 without booting** — three smoke runs "passed" while migration v3 silently never applied. `scripts/electron-run.mjs` kills strays and asserts on a *freshly written* artefact |
+
+Verification: `npm run test:storage` (new — records into a chosen folder, then **resets the
+setting** and proves the row still resolves and still deletes) · `npm run test:qa` (also exercises
+`publish`, so the sidecars) · sidecar contents inspected, `.srt` validated by ffprobe ·
+`npm run test:honesty` · lint 0 · typecheck (3 projects) · 180 unit tests.
+
+**Cleanup done (user's decision, 2026-08-31):** all 57 meetings deleted through the app's own
+`deleteMeeting()` path — 549 MB of media plus 83 transcript segments, 6 summaries, 5 Q&A reports
+and 170 job rows. Ten pre-database recordings left over from the Phase 1 spikes were removed too.
+`meetfroge.db.pre-v2.bak` and `.pre-v3.bak` are kept. The Library starts empty.
+
+---
+
 ## Open items (non-blocking)
 
 | Item | Status | Notes |

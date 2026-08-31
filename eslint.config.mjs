@@ -20,4 +20,18 @@ export default tseslint.config(
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
     },
   },
+  {
+    // electron-builder loads its hooks with require(); a .cjs file is the point.
+    files: ['**/*.cjs'],
+    rules: { '@typescript-eslint/no-require-imports': 'off' },
+  },
+  {
+    // MISTAKES.md M-022: Electron on Windows is a GUI-subsystem binary, so
+    // main-process stdout goes nowhere. A console.* call here is equivalent to
+    // deleting the message - two recordings died and left a one-line log file.
+    // src/main/log.ts is the only place allowed to touch the console.
+    files: ['src/main/**/*.ts'],
+    ignores: ['src/main/log.ts'],
+    rules: { 'no-console': 'error' },
+  },
 )

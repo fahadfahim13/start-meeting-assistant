@@ -1,4 +1,4 @@
-import { app } from 'electron'
+import { desktopCapturer } from 'electron'
 import { spawn, type ChildProcessByStdio } from 'node:child_process'
 import type { Readable, Writable } from 'node:stream'
 import { mkdirSync, statSync, readdirSync, rmSync, existsSync } from 'node:fs'
@@ -10,9 +10,18 @@ import { AppError } from '@shared/errors'
 import { probeCapabilities } from '@main/platform/capability-probe'
 import { resolveBinary } from '@main/platform/binaries'
 import * as meetings from '@main/db/repositories/meetings'
+import { classifyLevel, describeLevel } from '@shared/audio-levels'
+import {
+  currentRootKind,
+  recordingsRoot,
+  relativizeMedia,
+  resolveMedia,
+  rootAvailable,
+} from '@main/platform/storage'
+import { log } from '@main/log'
 import { buildCaptureArgs } from './ffmpeg-builder'
 import { LoopbackBridge } from './loopback-bridge'
-import { concatSegments, diskFreeBytes, probeDurationS } from './media-tools'
+import { concatSegments, diskFreeBytes, measureTrackLevels, probeDurationS } from './media-tools'
 
 /**
  * Recording session lifecycle (Phase 2 shape).
@@ -33,6 +42,8 @@ const STOP_GRACE_MS = 10_000
 // run for 5 minutes to produce multiple segments. Clamped, defaults to 300.
 const SEGMENT_TIME_S = Math.min(3600, Math.max(5, parseInt(process.env['MEETFROGE_SEGTIME'] ?? '300', 10) || 300))
 const DISK_GUARD_INTERVAL_MS = 10_000
+/** 3 x 10 s: long enough to ride out a transient statfs, short enough to salvage. */
+const DISK_PROBE_FAILURES_BEFORE_STOP = 3
 
 export interface SessionEvents {
   onStatus(status: SessionStatus): void
@@ -62,6 +73,12 @@ interface ActiveSession {
   accumulatedMs: number
   runStartedAt: number | null
   encoder: string
+  /**
+   * ffmpeg's last words, kept after `run` is torn down. Without this the
+   * finalize catch had nothing to log but "finalize failed" — which is how two
+   * dead recordings produced a log file containing one line (M-022).
+   */
+  lastStderrTail: string[]
   totalPcmDrops: number
   totalPcmBackpressure: number
   statusTimer: ReturnType<typeof setInterval>
@@ -71,13 +88,16 @@ interface ActiveSession {
 export class SessionManager {
   private active: ActiveSession | null = null
   private lastError: string | null = null
+  /** Findings about the most recently finished recording (M-023). */
+  private lastWarnings: string[] = []
+  /** Consecutive failed disk probes; see diskGuard(). */
+  private diskProbeFailures = 0
 
   constructor(private events: SessionEvents) {}
 
+  /** Where new recordings go — the configured folder, or the default. */
   recordingsDir(): string {
-    const dir = path.join(app.getPath('userData'), 'recordings')
-    mkdirSync(dir, { recursive: true })
-    return dir
+    return recordingsRoot()
   }
 
   // ---- validation ---------------------------------------------------------
@@ -95,6 +115,16 @@ export class SessionManager {
     if (!config.screen && !config.camera) errors.push('Select at least one video source (screen or camera).')
     if (!config.microphone && !config.systemAudio) warnings.push('No audio source selected — the recording will be silent.')
     if (config.screen?.kind === 'window') warnings.push('Minimizing the captured window will freeze its capture.')
+
+    // A recordings folder that has gone away (unplugged drive, disconnected
+    // share) is a blocking ERROR, not a warning: starting a recording into a
+    // dead path loses it, and the recording is sacred (Principle 2).
+    const root = rootAvailable()
+    if (!root.ok) {
+      errors.push(
+        `The recordings folder is not writable right now: ${root.path}. Choose another folder in Settings, or reconnect the drive.`,
+      )
+    }
 
     const profile = QUALITY_PROFILES[config.preset]
     const videoK = profile.screenBitrateK + (config.camera ? profile.cameraBitrateK : 0)
@@ -116,10 +146,58 @@ export class SessionManager {
 
   // ---- lifecycle ----------------------------------------------------------
 
+  /**
+   * Re-resolve a window source immediately before recording (M-021).
+   *
+   * The title was captured when the picker enumerated sources, possibly minutes
+   * ago, but gdigrab matches `title=` EXACTLY and has no HWND selector. A tab
+   * switch, a save, an unread-count badge, a loading spinner in the title — and
+   * the window ffmpeg is told to find no longer exists. The desktopCapturer id
+   * (`window:<HWND>:<n>`) is stable across all of that, so it is the key and
+   * the title is refreshed from it.
+   */
+  private async resolveWindowSource(config: CaptureConfig): Promise<CaptureConfig> {
+    const screen = config.screen
+    if (!screen || screen.kind !== 'window') return config
+
+    const sources = await desktopCapturer.getSources({
+      types: ['window'],
+      // Small but non-zero: an empty thumbnail is how a minimised window
+      // announces itself, and that is worth knowing before we record it.
+      thumbnailSize: { width: 320, height: 180 },
+      fetchWindowIcons: false,
+    })
+    const match = sources.find((s) => s.id === screen.sourceId)
+    if (!match) {
+      throw new AppError(
+        'DEVICE_NOT_FOUND',
+        `The window "${screen.label ?? screen.windowTitle ?? 'you selected'}" is no longer open. Pick it again.`,
+      )
+    }
+
+    if (match.thumbnail.isEmpty()) {
+      // Not fatal: the chain now pads up to the encoder floor, so this records
+      // successfully — it just records almost nothing useful. Say so rather
+      // than hand back a black rectangle without comment.
+      this.lastWarnings.push(
+        'The selected window looks minimised. Restore it before recording, or the capture will be a blank strip.',
+      )
+    }
+
+    if (match.name === screen.windowTitle) return config
+    // Deliberately not logging either title: window titles carry document and
+    // conversation names.
+    log.info('capture', 'window title changed since selection — re-resolved from source id')
+    return { ...config, screen: { ...screen, windowTitle: match.name } }
+  }
+
   async start(config: CaptureConfig): Promise<string> {
     if (this.active) throw new AppError('CAPTURE_ALREADY_ACTIVE')
     const validation = await this.validate(config)
     if (!validation.ok) throw new AppError('CAPTURE_FFMPEG_SPAWN', validation.errors.join(' '))
+
+    this.lastWarnings = []
+    config = await this.resolveWindowSource(config)
 
     const meetingId = randomUUID()
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
@@ -133,7 +211,8 @@ export class SessionManager {
     meetings.createMeeting({
       id: meetingId,
       title: config.title,
-      mediaPath: path.join('recordings', baseName), // relative; becomes the file on finalize
+      mediaPath: relativizeMedia(segmentDir).relative, // becomes the file on finalize
+      mediaRoot: currentRootKind(),
       captureProfile: {
         preset: config.preset,
         encoder,
@@ -166,6 +245,7 @@ export class SessionManager {
       accumulatedMs: 0,
       runStartedAt: null,
       encoder,
+      lastStderrTail: [],
       totalPcmDrops: 0,
       totalPcmBackpressure: 0,
       statusTimer: setInterval(() => this.events.onStatus(this.status()), 1000),
@@ -173,6 +253,9 @@ export class SessionManager {
     }
     this.active = session
     this.lastError = null
+    this.diskProbeFailures = 0
+    // NB: lastWarnings is cleared at the TOP of start(), not here —
+    // resolveWindowSource() may already have added one.
 
     try {
       await this.spawnRun(session)
@@ -213,6 +296,13 @@ export class SessionManager {
       stdio: ['pipe', 'ignore', 'pipe'],
     })
 
+    log.info('capture', 'ffmpeg spawned', {
+      meetingId: session.meetingId,
+      encoder: built.encoder,
+      layout: built.trackLayout,
+      segmentFrom: session.nextSegmentNumber,
+    })
+
     const run: RunProcess = { ffmpeg, bridge, stderrTail: [] }
     session.run = run
     session.runStartedAt = Date.now()
@@ -229,9 +319,26 @@ export class SessionManager {
       }
     })
 
-    ffmpeg.on('error', (e) => this.fail(`ffmpeg spawn error: ${e.message}`))
+    ffmpeg.on('error', (e) => {
+      log.error('capture', 'ffmpeg failed to spawn', {
+        meetingId: session.meetingId,
+        encoder: built.encoder,
+        error: e.message,
+      })
+      this.fail(`ffmpeg spawn error: ${e.message}`)
+    })
     ffmpeg.on('exit', (code) => {
       if (this.active === session && session.run === run && session.phase === 'recording' && code !== 0 && code !== null) {
+        // The stderr tail is the whole diagnosis. `frame= 0 ... Conversion
+        // failed!` is what a rejected video chain looks like (M-021), and
+        // before this it went nowhere at all (M-022).
+        log.error('capture', 'ffmpeg exited mid-recording', {
+          meetingId: session.meetingId,
+          code,
+          encoder: built.encoder,
+          layout: built.trackLayout,
+          stderrTail: run.stderrTail.slice(-15),
+        })
         this.fail(`ffmpeg exited ${code}: ${run.stderrTail.slice(-5).join(' | ')}`)
       }
     })
@@ -243,7 +350,10 @@ export class SessionManager {
     session.currentSegmentDbId = meetings.addSegment({
       meetingId: session.meetingId,
       seq,
-      path: path.relative(app.getPath('userData'), absPath),
+      // Relative to whichever root this recording is being written under, so
+      // a custom folder outside userData does not produce a '..' path that the
+      // containment guard would (correctly) refuse.
+      path: relativizeMedia(absPath).relative,
       startedAt: Date.now(),
     })
     session.nextSegmentNumber = seq + 1
@@ -254,7 +364,7 @@ export class SessionManager {
     const rows = meetings.segmentsFor(session.meetingId)
     const row = rows.find((r) => r.id === session.currentSegmentDbId)
     if (row) {
-      const abs = path.join(app.getPath('userData'), row.path)
+      const abs = resolveMedia({ media_root: currentRootKind(), media_path: row.path })
       let bytes = 0
       try {
         bytes = statSync(abs).size
@@ -285,11 +395,15 @@ export class SessionManager {
     }
     const code = await Promise.race([exited, new Promise<null>((r) => setTimeout(() => r(null), STOP_GRACE_MS))])
     if (code === null && run.ffmpeg.exitCode === null) {
-      console.warn('[session] ffmpeg ignored q — killing (last resort)')
+      log.warn('capture', 'ffmpeg ignored q — killing (last resort)', {
+        meetingId: session.meetingId,
+        stderrTail: run.stderrTail.slice(-5),
+      })
       run.ffmpeg.kill()
       await exited
     }
     run.bridge?.destroy()
+    session.lastStderrTail = run.stderrTail.slice(-20)
     this.finalizeCurrentSegment(session)
     if (session.runStartedAt) session.accumulatedMs += Date.now() - session.runStartedAt
     session.runStartedAt = null
@@ -339,17 +453,38 @@ export class SessionManager {
       const durationS = await probeDurationS(session.finalPath)
       if (durationS === null) throw new Error('concatenated file is not playable')
 
+      const bytes = statSync(session.finalPath).size
       meetings.finalizeMeeting(
         session.meetingId,
-        path.relative(app.getPath('userData'), session.finalPath),
-        statSync(session.finalPath).size,
+        relativizeMedia(session.finalPath).relative,
+        bytes,
         Math.round(durationS * 1000),
       )
       // Only after the final file verifiably exists do the segments go.
       rmSync(session.segmentDir, { recursive: true, force: true })
+
+      await this.checkAudioLevels(session)
+
+      // A success line is what makes the NEXT failure readable: without a
+      // known-good baseline in the log there is nothing to compare against.
+      log.info('capture', 'session finalized', {
+        meetingId: session.meetingId,
+        encoder: session.encoder,
+        durationMs: Math.round(durationS * 1000),
+        bytes,
+        segments: segFiles.length,
+        pcmDrops: session.totalPcmDrops,
+        warnings: this.lastWarnings.length,
+      })
     } catch (e) {
       // Segments stay on disk; recovery can pick them up.
       meetings.setMeetingState(session.meetingId, 'failed')
+      log.error('capture', 'finalize failed', {
+        meetingId: session.meetingId,
+        error: String(e).slice(0, 500),
+        segmentDir: path.basename(session.segmentDir),
+        stderrTail: session.lastStderrTail.slice(-10),
+      })
       this.fail(`finalize failed: ${String(e)} — segments kept in ${path.basename(session.segmentDir)}`)
       return this.status()
     }
@@ -361,6 +496,43 @@ export class SessionManager {
     return { ...status, state: 'idle' }
   }
 
+  /**
+   * Measure the finished recording's audio and turn silence into a sentence
+   * (M-023). This is the moment the user is still present and still remembers
+   * what they did; an hour later, staring at an empty transcript, they cannot
+   * reconstruct that their headphones moved the loopback endpoint.
+   *
+   * Never throws. A measurement failure must not downgrade a good recording.
+   */
+  private async checkAudioLevels(session: ActiveSession): Promise<void> {
+    const tracks: ('mic' | 'system')[] = []
+    if (session.config.microphone) tracks.push('mic')
+    if (session.config.systemAudio) tracks.push('system')
+    if (tracks.length === 0) return
+
+    try {
+      const levels = await measureTrackLevels(session.finalPath, tracks.length)
+      levels.forEach((measured, i) => {
+        const track = tracks[i]
+        if (!track) return
+        const level = classifyLevel(measured)
+        if (level === 'ok') return
+        const message = describeLevel(level, track)
+        if (message) this.lastWarnings.push(message)
+        log.warn('capture', 'audio track carries no usable signal', {
+          meetingId: session.meetingId,
+          track,
+          // NOT `level` — that is the log envelope's own field.
+          audioLevel: level,
+          meanVolumeDb: measured.meanVolumeDb,
+          maxVolumeDb: measured.maxVolumeDb,
+        })
+      })
+    } catch (e) {
+      log.warn('capture', 'audio level measurement failed', { error: String(e).slice(0, 200) })
+    }
+  }
+
   // ---- guards & plumbing --------------------------------------------------
 
   private async diskGuard(): Promise<void> {
@@ -368,13 +540,34 @@ export class SessionManager {
     if (!session || session.phase !== 'recording') return
     try {
       const free = await diskFreeBytes(this.recordingsDir())
+      this.diskProbeFailures = 0
       if (free < STORAGE_FLOOR_BYTES) {
-        console.warn('[session] disk floor reached — auto-stopping to protect the recording')
+        log.warn('capture', 'disk floor reached — auto-stopping to protect the recording', {
+          meetingId: session.meetingId,
+          freeBytes: free,
+          floorBytes: STORAGE_FLOOR_BYTES,
+        })
         this.lastError = 'Recording stopped automatically: disk space fell below the safety floor.'
         await this.stop()
       }
-    } catch {
-      /* transient statfs failure — next tick */
+    } catch (e) {
+      // A single statfs failure is genuinely transient and must stay harmless.
+      // A RUN of them is not: it is a removable drive pulled or a network share
+      // dropped, and every further second of recording is being written into
+      // nothing. Salvage what exists rather than discovering it at stop
+      // (Principle 2 — the recording is sacred).
+      this.diskProbeFailures++
+      if (this.diskProbeFailures >= DISK_PROBE_FAILURES_BEFORE_STOP) {
+        log.error('capture', 'recordings folder unreachable — auto-stopping to salvage the recording', {
+          meetingId: session.meetingId,
+          consecutiveFailures: this.diskProbeFailures,
+          error: String(e).slice(0, 200),
+        })
+        this.lastError =
+          'Recording stopped automatically: the recordings folder became unreachable. What was captured up to that point has been saved.'
+        this.diskProbeFailures = 0
+        await this.stop()
+      }
     }
   }
 
@@ -414,11 +607,16 @@ export class SessionManager {
       pcmBackpressure: (s?.totalPcmBackpressure ?? 0) + (runStats?.backpressure ?? 0),
       encoderInUse: s?.encoder ?? null,
       error: this.lastError,
+      warnings: [...this.lastWarnings],
     }
   }
 
   private fail(message: string): void {
-    console.error('[session]', message)
+    log.error('capture', 'session failed', {
+      meetingId: this.active?.meetingId ?? null,
+      encoder: this.active?.encoder ?? null,
+      detail: message.slice(0, 800),
+    })
     this.lastError = message
     const session = this.active
     if (session) {

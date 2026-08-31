@@ -43,7 +43,63 @@ export interface BuiltCommand {
   trackLayout: { screen: boolean; camera: boolean; mic: boolean; system: boolean }
 }
 
-/** The chain each encoder needs between ddagrab and itself (MISTAKES.md M-001). */
+/**
+ * The pixel format each encoder must be handed (MISTAKES.md M-001, M-007, M-021).
+ *
+ * Hardware encoders take system-memory NV12; libx264 wants yuv420p. This is the
+ * single source of truth for that decision, so a new video source cannot forget
+ * the conversion.
+ *
+ * Note: gdigrab's BGRA does in fact reach h264_amf successfully via ffmpeg's
+ * auto-inserted conversion (verified — a full-desktop gdigrab capture encodes
+ * fine with no explicit format). We are explicit anyway because M-001 showed
+ * auto-conversion is not dependable across chains, and being explicit costs
+ * nothing. It was NOT the cause of the window-capture failure — see M-021.
+ */
+function encoderPixelFormat(encoder: EncoderId): string {
+  return encoder === 'libx264' || encoder === 'libx264_ultrafast' ? 'yuv420p' : 'nv12'
+}
+
+/**
+ * h264_amf refuses to initialise below 128x128 (MISTAKES.md M-021).
+ *
+ * Measured on REF-01, not guessed: 128x128 encodes, 126x240 / 320x126 / 160x120
+ * all fail with `encoder->Init() failed with error 5`, which ffmpeg surfaces as
+ * the useless `-22 Invalid argument`. libx264 accepts every one of those sizes,
+ * so this is an AMF constraint, not an h264 one.
+ */
+const AMF_MIN_DIMENSION = 128
+
+/**
+ * The chain for a gdigrab source — window capture and the no-ddagrab desktop
+ * fallback both land here.
+ *
+ * M-021: window capture used to map gdigrab's output straight into the encoder.
+ * A *minimised* window is captured by gdigrab at its tiny restored-down size
+ * (measured: 181x25 for a collapsed Slack window), h264_amf rejects that, and
+ * the whole recording dies with `frame= 0 … Conversion failed!` — all four
+ * tracks lost because one video source was too small.
+ *
+ * `pad` rather than `scale`: padding keeps the captured pixels at their true
+ * size and fills the remainder, where upscaling would silently stretch a
+ * 181x25 strip into a distorted frame and call it success. One expression
+ * enforces both the AMF floor and h264's even-dimension requirement.
+ * The `\,` escapes are required — inside a filter, a bare comma is a separator.
+ */
+export function gdigrabFilter(inputIndex: number, encoder: EncoderId, fps: number): string {
+  const pix = encoderPixelFormat(encoder)
+  const even = (dim: string): string => `ceil(max(${dim}\\,${AMF_MIN_DIMENSION})/2)*2`
+  return `[${inputIndex}:v]fps=${fps},pad=${even('iw')}:${even('ih')},format=${pix}[vscreen]`
+}
+
+/**
+ * The chain each encoder needs between ddagrab and itself (MISTAKES.md M-001).
+ *
+ * These are the verified-working recipes from CLAUDE.md and are reproduced
+ * VERBATIM, including libx264 taking bgra and letting ffmpeg auto-convert —
+ * that exact chain is what the capability probe and the forced-software-encode
+ * E2E exercise. Do not "unify" it with encoderPixelFormat().
+ */
 function screenFilter(encoder: EncoderId, displayIndex: number, fps: number): string {
   const src = `ddagrab=${displayIndex}:framerate=${fps}`
   switch (encoder) {
@@ -159,23 +215,23 @@ export function buildCaptureArgs(input: BuildInput): BuiltCommand {
         // gdigrab desktop fallback comes in as its own input instead.
         args.push('-f', 'gdigrab', '-framerate', String(profile.screenFps), '-i', 'desktop')
         windowInput = inputIndex++
-        screenLabel = `${windowInput}:v`
+        filters.push(gdigrabFilter(windowInput, encoder, profile.screenFps))
+        screenLabel = 'vscreen'
       } else {
         filters.push(screenFilter(encoder, config.screen.displayIndex ?? 0, profile.screenFps))
         screenLabel = 'vscreen'
       }
     } else {
-      screenLabel = `${windowInput}:v`
+      filters.push(gdigrabFilter(windowInput, encoder, profile.screenFps))
+      screenLabel = 'vscreen'
     }
   }
 
   if (cameraInput >= 0) {
     // Same M-001 rule as the screen chain, second instance (see M-007): the
-    // camera frames must arrive in the encoder's input format. Hardware
-    // encoders take system-memory NV12; libx264 wants yuv420p.
-    const camFormat = encoder === 'libx264' || encoder === 'libx264_ultrafast' ? 'yuv420p' : 'nv12'
+    // camera frames must arrive in the encoder's input format.
     filters.push(
-      `[${cameraInput}:v]fps=${profile.cameraFps},scale=-2:480,format=${camFormat}[vcam]`,
+      `[${cameraInput}:v]fps=${profile.cameraFps},scale=-2:480,format=${encoderPixelFormat(encoder)}[vcam]`,
     )
   }
 
@@ -189,9 +245,10 @@ export function buildCaptureArgs(input: BuildInput): BuiltCommand {
     system: systemInput >= 0,
   }
 
-  if (screenLabel) {
-    args.push('-map', screenLabel.includes(':') ? screenLabel : `[${screenLabel}]`)
-  }
+  // Every video source now arrives through a filter chain (M-021), so the label
+  // is always a filter pad. There is deliberately no raw `N:v` mapping left —
+  // that was the shape that let gdigrab reach the encoder unconverted.
+  if (screenLabel) args.push('-map', `[${screenLabel}]`)
   if (cameraInput >= 0) args.push('-map', '[vcam]')
 
   if (screenLabel || cameraInput >= 0) {

@@ -108,7 +108,7 @@ console.log('MeetFroge full verification sweep — keep volume ON, machine idle.
 {
   const t0 = Date.now()
   const before = new Set(readdirSync(path.join(appData, 'recordings')))
-  const app = spawn(electron, ['.'], {
+  spawn(electron, ['.'], {
     cwd: root, shell: false, stdio: 'ignore',
     env: { ...process.env, MEETFROGE_AUTOREC: '600', MEETFROGE_SEGTIME: '8' },
   })
@@ -132,7 +132,7 @@ console.log('MeetFroge full verification sweep — keep volume ON, machine idle.
   spawnSync('taskkill', ['/F', '/IM', 'ffmpeg.exe', '/T'], { shell: false })
   await new Promise((r) => setTimeout(r, 2000))
   rmSync(path.join(root, 'out', 'smoke.json'), { force: true })
-  const r2 = runCmd('node', [path.join(root, 'scripts', 'smoke.mjs')], {}, 180_000)
+  runCmd('node', [path.join(root, 'scripts', 'smoke.mjs')], {}, 180_000)
   const d = readJson(path.join(root, 'out', 'smoke.json'))
   const rec = (d?.recovery ?? []).find((x) => x.outcome === 'recovered')
   record('crash recovery: hard kill mid-recording', !!rec,

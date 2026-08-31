@@ -26,7 +26,15 @@ export const INVOKE_CHANNELS = {
   },
   'devices:screenPreview': {
     request: z.object({ sourceId: z.string().min(1).max(256) }),
-    response: z.object({ thumbnailDataUrl: z.string().max(4_000_000).nullable() }),
+    response: z.object({
+      thumbnailDataUrl: z.string().max(4_000_000).nullable(),
+      /**
+       * Why there is no image. "The window you picked was closed" and "the
+       * window you picked is minimised" are different problems with different
+       * fixes; a bare null told the user neither and rendered a blank panel.
+       */
+      status: z.enum(['ok', 'not-found', 'empty']),
+    }),
   },
   'devices:probeCapabilities': {
     request: z.object({ force: z.boolean() }),
@@ -69,7 +77,27 @@ export const INVOKE_CHANNELS = {
           bytes: z.number().nullable(),
           sourceLabel: z.string().nullable(),
           tags: z.array(z.string()),
-          jobs: z.array(z.object({ stage: z.string(), state: z.string(), progress: z.number() })),
+          /**
+           * `id` is what makes `jobs:retry` reachable at all: the channel wants
+           * a job id and no job id had ever crossed IPC, so the retry handler
+           * had zero callers. A job id is a database key, never a path — the
+           * "no renderer-supplied path" invariant is untouched.
+           *
+           * errorCode/errorDetail carry SKIP reasons as well as failures. A
+           * skip with no reason is indistinguishable from "still queued".
+           */
+          jobs: z.array(
+            z.object({
+              id: z.string(),
+              stage: z.string(),
+              state: z.string(),
+              progress: z.number(),
+              errorCode: z.string().max(64).nullable(),
+              errorDetail: z.string().max(1000).nullable(),
+              attempts: z.number(),
+              maxAttempts: z.number(),
+            }),
+          ),
         }),
       ),
     }),
@@ -160,9 +188,59 @@ export const INVOKE_CHANNELS = {
     request: z.object({ meetingId: z.string().uuid() }),
     response: z.object({ enqueued: z.boolean() }),
   },
+  // ---- Q&A report -------------------------------------------------------
+  // Generated on demand, not as part of automatic processing: the user asked
+  // for a button, and a report nobody opened is minutes of inference wasted.
+  'qa:get': {
+    request: z.object({ meetingId: z.string().uuid() }),
+    response: z.object({
+      report: z
+        .object({
+          pairs: z.array(
+            z.object({
+              q: z.string().max(300),
+              a: z.string().max(1200),
+              /** Snapped to a real transcript segment, or null — never a guess. */
+              t: z.number().int().min(0).nullable(),
+            }),
+          ),
+          degraded: z.boolean(),
+          generatedAt: z.number(),
+        })
+        .nullable(),
+    }),
+  },
+  'qa:regenerate': {
+    request: z.object({ meetingId: z.string().uuid() }),
+    response: z.object({ enqueued: z.boolean() }),
+  },
+  'qa:export': {
+    // The renderer names a FORMAT, never a path — main owns the save dialog.
+    request: z.object({ meetingId: z.string().uuid(), format: z.enum(['md', 'txt', 'json']) }),
+    response: z.object({ saved: z.boolean(), fileName: z.string().nullable() }),
+  },
   'actionitem:toggle': {
     request: z.object({ actionItemId: z.string().uuid(), done: z.boolean() }),
     response: z.object({ ok: z.boolean() }),
+  },
+  // The renderer asks main to OPEN A PICKER; it never sends a path.
+  //
+  // The invariant is directional: "no renderer-supplied filesystem path ever
+  // crosses IPC" is about REQUESTS. Returning a path in a response is already
+  // established practice (settings:get returns modelsDir/recordingsDir). So
+  // there is deliberately no `recordingsDir` field on settings:set — main owns
+  // the dialog, validates the result, and writes the setting itself. ADR-016.
+  'settings:chooseRecordingsFolder': {
+    request: z.object({}),
+    response: z.object({
+      ok: z.boolean(),
+      path: z.string().max(500).nullable(),
+      reason: z.string().max(300).nullable(),
+    }),
+  },
+  'settings:resetRecordingsFolder': {
+    request: z.object({}),
+    response: z.object({ ok: z.boolean(), path: z.string().max(500) }),
   },
   'settings:get': {
     request: z.object({}),
@@ -173,6 +251,11 @@ export const INVOKE_CHANNELS = {
       keyframeSensitivity: z.enum(['sensitive', 'balanced', 'sparse']),
       modelsDir: z.string(),
       recordingsDir: z.string(),
+      /** False when the user has chosen a folder of their own. */
+      recordingsDirIsDefault: z.boolean(),
+      /** The folder exists and is writable right now (write-probed). */
+      recordingsDirWritable: z.boolean(),
+      writeSidecarFiles: z.boolean(),
       models: z.array(
         z.object({
           id: z.string(),
@@ -192,6 +275,11 @@ export const INVOKE_CHANNELS = {
       language: z.enum(['en', 'bn', 'auto']).optional(),
       autoProcess: z.boolean().optional(),
       keyframeSensitivity: z.enum(['sensitive', 'balanced', 'sparse']).optional(),
+      writeSidecarFiles: z.boolean().optional(),
+      // NOTE: `recordingsDir` is deliberately absent. A filesystem path may
+      // leave main in a RESPONSE but must never enter in a REQUEST — the folder
+      // is set only by settings:chooseRecordingsFolder, which owns the dialog
+      // and validates the result itself. See ADR-016 before "completing" this.
     }),
     response: z.object({ ok: z.boolean() }),
   },
@@ -257,6 +345,25 @@ export type IpcResult<T> = IpcOk<T> | IpcErr
 
 export type InvokeRequest<C extends InvokeChannel> = z.infer<(typeof INVOKE_CHANNELS)[C]['request']>
 export type InvokeResponse<C extends InvokeChannel> = z.infer<(typeof INVOKE_CHANNELS)[C]['response']>
+
+/**
+ * Shape of the `jobs:update` push event (the raw job row, snake_case).
+ *
+ * Events arrive as `unknown` by design — the invoke gateway validates request
+ * and response, but a push has no such gate, so the consumer validates. Used by
+ * the Library to patch one job in place instead of re-querying every meeting on
+ * every whisper progress tick.
+ */
+export const JobUpdateSchema = z.object({
+  id: z.string(),
+  meeting_id: z.string(),
+  stage: z.string(),
+  state: z.string(),
+  progress: z.number(),
+  attempts: z.number(),
+  error_code: z.string().nullable(),
+})
+export type JobUpdate = z.infer<typeof JobUpdateSchema>
 
 /** The exact surface preload exposes as window.meetfroge. */
 export interface MeetFrogeApi {

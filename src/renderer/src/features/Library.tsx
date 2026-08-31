@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api'
+import { JobUpdateSchema } from '@shared/ipc'
 import { t } from '../i18n'
 
 interface MeetingItem {
@@ -11,7 +12,16 @@ interface MeetingItem {
   bytes: number | null
   sourceLabel: string | null
   tags: string[]
-  jobs: { stage: string; state: string; progress: number }[]
+  jobs: {
+    id: string
+    stage: string
+    state: string
+    progress: number
+    errorCode: string | null
+    errorDetail: string | null
+    attempts: number
+    maxAttempts: number
+  }[]
 }
 
 interface Keyframe {
@@ -32,6 +42,12 @@ interface SummaryData {
   topics: string[]
   open_questions: string[]
   degraded: boolean
+}
+
+interface QaReport {
+  pairs: { q: string; a: string; t: number | null }[]
+  degraded: boolean
+  generatedAt: number
 }
 
 interface ActionItem {
@@ -71,11 +87,26 @@ function fmtBytes(n: number | null): string {
   return n < 1024 ** 3 ? `${(n / 1024 ** 2).toFixed(0)} MB` : `${(n / 1024 ** 3).toFixed(2)} GB`
 }
 
+/**
+ * `skipped` gets its own class. It used to fall into the same bucket as
+ * `pending`, so a step that had decided not to run looked identical to one
+ * still waiting its turn - forever. That is what "processing may still be
+ * running" meant on a pipeline that had finished ten minutes earlier.
+ */
 function JobBadge({ job }: { job: MeetingItem['jobs'][number] }): React.JSX.Element {
   const cls =
-    job.state === 'done' ? 'ok' : job.state === 'failed' ? 'err' : job.state === 'running' ? 'run' : 'wait'
+    job.state === 'done'
+      ? 'ok'
+      : job.state === 'failed'
+        ? 'err'
+        : job.state === 'running'
+          ? 'run'
+          : job.state === 'skipped'
+            ? 'skip'
+            : 'wait'
+  const reason = job.errorCode ? ` - ${t.library.jobReason(job.errorCode)}` : ''
   return (
-    <span className={`job-badge ${cls}`} title={`${job.stage}: ${job.state}`}>
+    <span className={`job-badge ${cls}`} title={`${job.stage}: ${job.state}${reason}`}>
       {job.stage}
       {job.state === 'running' ? ` ${job.progress}%` : ''}
     </span>
@@ -90,7 +121,8 @@ export default function Library(): React.JSX.Element {
   const [activeKf, setActiveKf] = useState<Keyframe | null>(null)
   const [summary, setSummary] = useState<SummaryData | null>(null)
   const [actionItems, setActionItems] = useState<ActionItem[]>([])
-  const [view, setView] = useState<'summary' | 'transcript'>('summary')
+  const [view, setView] = useState<'summary' | 'transcript' | 'qa'>('summary')
+  const [qa, setQa] = useState<QaReport | null>(null)
   const [globalSearch, setGlobalSearch] = useState('')
   const [globalHits, setGlobalHits] = useState<{ meetingId: string; meetingTitle: string; kind: string; text: string; startMs: number }[] | null>(null)
   const [currentMs, setCurrentMs] = useState(0)
@@ -159,9 +191,47 @@ export default function Library(): React.JSX.Element {
 
   useEffect(() => {
     void refresh()
-    // Job updates re-render the list live (progress %, state changes).
-    const off = api.onJobsUpdate(() => void refresh())
-    return off
+    // Patch the single job the event carries, and debounce the full re-query.
+    // Every whisper progress tick used to trigger a complete meetings:list -
+    // a tags subquery and a jobsFor query for up to 100 meetings, several times
+    // a second, on a 15 W laptop that is simultaneously running inference.
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const off = api.onJobsUpdate((raw) => {
+      // Push events carry no gateway validation - the consumer validates.
+      const parsed = JobUpdateSchema.safeParse(raw)
+      if (!parsed.success) return
+      const job = parsed.data
+      setItems((prev) =>
+        prev.map((m) =>
+          m.id === job.meeting_id
+            ? {
+                ...m,
+                jobs: m.jobs.map((j) =>
+                  j.id === job.id
+                    ? {
+                        ...j,
+                        state: job.state,
+                        progress: job.progress,
+                        errorCode: job.error_code,
+                        attempts: job.attempts,
+                      }
+                    : j,
+                ),
+              }
+            : m,
+        ),
+      )
+      if (timer === null) {
+        timer = setTimeout(() => {
+          timer = null
+          void refresh()
+        }, 1000)
+      }
+    })
+    return () => {
+      if (timer !== null) clearTimeout(timer)
+      off()
+    }
   }, [refresh])
 
   useEffect(() => {
@@ -185,6 +255,9 @@ export default function Library(): React.JSX.Element {
         setSummary(r.data.summary)
         setActionItems(r.data.actionItems)
       }
+    })
+    void api.invoke('qa:get', { meetingId: selected }).then((r) => {
+      if (r.ok) setQa(r.data.report)
     })
   }, [selected, items])
 
@@ -266,18 +339,46 @@ export default function Library(): React.JSX.Element {
                   {m.jobs.map((j) => (
                     <JobBadge key={j.stage} job={j} />
                   ))}
-                  {m.jobs.length === 0 && (
-                    <button
-                      className="link"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        void api.invoke('meetings:process', { meetingId: m.id }).then(refresh)
-                      }}
-                    >
-                      {t.library.transcribe}
-                    </button>
-                  )}
+                  {/* Previously this button existed ONLY while a meeting had no
+                      jobs at all, so after the first automatic run it never came
+                      back - there was no way to re-process the meetings that
+                      most needed it. */}
+                  <button
+                    className="link"
+                    disabled={m.jobs.some((j) => j.state === 'running' || j.state === 'pending')}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      void api.invoke('meetings:process', { meetingId: m.id }).then(refresh)
+                    }}
+                  >
+                    {m.jobs.some((j) => j.state === 'running' || j.state === 'pending')
+                      ? t.library.processing
+                      : m.jobs.length === 0
+                        ? t.library.transcribe
+                        : t.library.reprocess}
+                  </button>
                 </span>
+                {/* One sentence per step that stopped for a reason. This is the
+                    difference between "nothing here" and "no sound was
+                    captured, so there was nothing to transcribe". */}
+                {m.jobs
+                  .filter((j) => j.errorCode && (j.state === 'skipped' || j.state === 'failed'))
+                  .map((j) => (
+                    <span key={j.id} className="job-reason">
+                      {j.stage}: {t.library.jobReason(j.errorCode!)}
+                      {j.state === 'failed' && (
+                        <button
+                          className="link"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            void api.invoke('jobs:retry', { jobId: j.id }).then(refresh)
+                          }}
+                        >
+                          {t.library.retryJob}
+                        </button>
+                      )}
+                    </span>
+                  ))}
               </button>
             </li>
           ))}
@@ -329,6 +430,9 @@ export default function Library(): React.JSX.Element {
             </button>
             <button className={view === 'transcript' ? 'tab active' : 'tab'} onClick={() => setView('transcript')}>
               {t.library.viewTranscript}
+            </button>
+            <button className={view === 'qa' ? 'tab active' : 'tab'} onClick={() => setView('qa')}>
+              {t.library.viewQa}
             </button>
             <span className="spacer" />
             <button
@@ -392,7 +496,18 @@ export default function Library(): React.JSX.Element {
         {!selected && <p className="empty">{t.library.selectMeeting}</p>}
         {selected && view === 'summary' && (
           <div className="summary-view">
-            {!summary && <p className="empty">{t.library.noSummary}</p>}
+            {!summary && (
+              <>
+                <p className="empty">{t.library.noSummary}</p>
+                {(items.find((x) => x.id === selected)?.jobs ?? [])
+                  .filter((j) => j.errorCode && (j.state === 'skipped' || j.state === 'failed'))
+                  .map((j) => (
+                    <p key={j.id} className="messages warn">
+                      {j.stage}: {t.library.jobReason(j.errorCode!)}
+                    </p>
+                  ))}
+              </>
+            )}
             {summary && (
               <>
                 {(() => {
@@ -448,18 +563,106 @@ export default function Library(): React.JSX.Element {
                     <ul>{summary.open_questions.map((q) => <li key={q}>{q}</li>)}</ul>
                   </>
                 )}
-                <button
-                  className="ghost small"
-                  onClick={() => selected && void api.invoke('summary:regenerate', { meetingId: selected })}
-                >
-                  {t.library.regenerate}
-                </button>
               </>
             )}
+            {/* Outside the `summary &&` guard on purpose: it used to render only
+                when a summary already existed, so the one situation where you
+                need it - there is no summary - was the one where it was
+                missing. */}
+            <button
+              className="ghost small"
+              onClick={() => selected && void api.invoke('summary:regenerate', { meetingId: selected })}
+            >
+              {t.library.regenerate}
+            </button>
+          </div>
+        )}
+        {selected && view === 'qa' && (
+          <div className="summary-view qa-view">
+            {(() => {
+              const meeting = items.find((x) => x.id === selected)
+              const running = meeting?.jobs.some((j) => j.stage === 'qa' && (j.state === 'running' || j.state === 'pending'))
+              const hasTranscript = segments.length > 0
+              return (
+                <>
+                  {qa?.degraded && <p className="messages warn">{t.library.qaDegraded}</p>}
+                  {!qa && (
+                    <>
+                      <p className="empty">{t.library.qaEmpty}</p>
+                      <p className="preview-note">{t.library.qaExplain}</p>
+                    </>
+                  )}
+                  {qa?.pairs.map((pair, i) => (
+                    <div key={`${i}-${pair.q}`} className="qa-pair">
+                      <h4 className="qa-q">{pair.q}</h4>
+                      <p className="qa-a">
+                        {pair.a}
+                        {/* Only when the timestamp survived snapping to a real
+                            segment - a seek that lands nowhere is worse than
+                            no seek at all. */}
+                        {pair.t !== null && (
+                          <button
+                            className="link"
+                            onClick={() => {
+                              setView('transcript')
+                              seekTo(pair.t!)
+                            }}
+                          >
+                            {fmtClock(pair.t)}
+                          </button>
+                        )}
+                      </p>
+                    </div>
+                  ))}
+                  {!hasTranscript && <p className="preview-note warn-note">{t.library.qaNeedsTranscript}</p>}
+                  <div className="export-group">
+                    <button
+                      className="ghost small"
+                      disabled={!hasTranscript || running}
+                      onClick={() => {
+                        if (!selected) return
+                        void api.invoke('qa:regenerate', { meetingId: selected }).then(refresh)
+                      }}
+                    >
+                      {running ? t.library.qaRunning : qa ? t.library.qaRegenerate : t.library.qaGenerate}
+                    </button>
+                    {qa &&
+                      (['md', 'txt', 'json'] as const).map((f) => (
+                        <button
+                          key={f}
+                          className="ghost small"
+                          onClick={() => {
+                            if (!selected) return
+                            void api.invoke('qa:export', { meetingId: selected, format: f }).then((r) => {
+                              if (r.ok) setExportMsg(r.data.saved ? t.library.exportSaved(r.data.fileName ?? '') : t.library.exportCancelled)
+                            })
+                          }}
+                        >
+                          {f}
+                        </button>
+                      ))}
+                  </div>
+                  {qa && (
+                    <p className="preview-note">
+                      {t.library.qaGeneratedAt(new Date(qa.generatedAt).toLocaleString())}
+                    </p>
+                  )}
+                </>
+              )
+            })()}
           </div>
         )}
         {selected && view === 'transcript' && segments.length === 0 && (
-          <p className="empty">{t.library.noTranscript}</p>
+          <>
+            <p className="empty">{t.library.noTranscript}</p>
+            {(items.find((x) => x.id === selected)?.jobs ?? [])
+              .filter((j) => j.errorCode && (j.state === 'skipped' || j.state === 'failed'))
+              .map((j) => (
+                <p key={j.id} className="messages warn">
+                  {j.stage}: {t.library.jobReason(j.errorCode!)}
+                </p>
+              ))}
+          </>
         )}
         {view !== 'transcript' && !selected && null}
         <div className="segments" role="list" style={{ display: view === 'transcript' ? undefined : 'none' }}>

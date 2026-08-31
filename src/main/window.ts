@@ -5,6 +5,8 @@ import { Readable } from 'node:stream'
 import { pathToFileURL } from 'node:url'
 import { getDb } from './db'
 import { isInside } from './security/paths'
+import { log } from '@main/log'
+import { resolveMedia } from '@main/platform/storage'
 
 /**
  * Hardened window factory. Every setting here is an invariant (CLAUDE.md,
@@ -72,7 +74,7 @@ export function hardenSession(): void {
   // Deny everything except media capture, and log what was asked for.
   ses.setPermissionRequestHandler((_wc, permission, callback) => {
     const allowed = permission === 'media' || permission === 'display-capture'
-    if (!allowed) console.warn(`[perm] denied: ${permission}`)
+    if (!allowed) log.warn('security', 'permission denied', { permission })
     callback(allowed)
   })
 
@@ -85,12 +87,15 @@ export function hardenSession(): void {
       const meetingId = decodeURIComponent(url.hostname || url.pathname.replace(/^\/+/, ''))
       if (!/^[0-9a-f-]{36}$/i.test(meetingId)) return new Response('bad request', { status: 400 })
       const row = getDb()
-        .prepare(`SELECT media_path FROM meetings WHERE id = ? AND state IN ('ready','recovered')`)
-        .get(meetingId) as unknown as { media_path: string } | undefined
+        .prepare(
+          `SELECT media_path, media_root FROM meetings WHERE id = ? AND state IN ('ready','recovered')`,
+        )
+        .get(meetingId) as unknown as { media_path: string; media_root: string } | undefined
       if (!row) return new Response('not found', { status: 404 })
-      const dataRoot = app.getPath('userData')
-      const resolved = path.resolve(dataRoot, row.media_path)
-      if (!isInside(dataRoot, resolved)) return new Response('forbidden', { status: 403 })
+      // The path still comes from the DB, never the URL (SECURITY.md T4);
+      // resolveMedia additionally contains it within the meeting's own root
+      // and throws instead of returning something outside it.
+      const resolved = resolveMedia(row)
 
       const size = statSync(resolved).size
       const rangeHeader = request.headers.get('Range')

@@ -28,17 +28,9 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const e2eFile = path.join(root, 'out', 'e2e.json')
 const recDir = path.join(process.env.APPDATA ?? '', 'meetfroge', 'recordings')
 const RECORD_S = 25
-const BURST_AFTER_FILE_S = 6
 
 const tmp = path.join(os.tmpdir(), 'meetfroge-sync')
 
-function listRecordings() {
-  try {
-    return new Set(readdirSync(recDir).filter((f) => f.endsWith('.mkv')))
-  } catch {
-    return new Set()
-  }
-}
 
 // --- 1. burst TRAIN: a 1 kHz pip every 3 s for 30 s ------------------------
 // A single late-fired burst proved fragile (M-020): the verified-reliable

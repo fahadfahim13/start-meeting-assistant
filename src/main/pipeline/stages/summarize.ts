@@ -5,6 +5,7 @@ import { getDb } from '@main/db'
 import * as transcripts from '@main/db/repositories/transcripts'
 import { chat, ensureLlm } from '../llm/server'
 import { chunkTranscript, renderChunk, type ChunkInput } from './chunking'
+import { log } from '@main/log'
 
 /**
  * Map-reduce summarization (plan §8.5). Chunks split at speaker turns; each
@@ -125,7 +126,7 @@ const SYSTEM_PROMPT =
 export async function summarizeMeeting(input: {
   meetingId: string
   onProgress(pct: number): void
-}): Promise<{ summary: Summary; degraded: boolean }> {
+}): Promise<{ summary: Summary; degraded: boolean; notes: ChunkNotes[] }> {
   const db = getDb()
   const rows = transcripts.transcriptFor(input.meetingId)
   if (rows.length === 0) throw new Error('no transcript to summarize')
@@ -172,11 +173,20 @@ export async function summarizeMeeting(input: {
     try {
       parsedJson = JSON.parse(reply)
     } catch {
-      console.warn(`[summarize] chunk ${i}: reply was not valid JSON (${reply.length} chars) — skipped`)
+      // Length only. The reply itself is meeting-derived text (M-018).
+      log.warn('summarize', 'chunk reply was not valid JSON - skipped', {
+        chunk: i,
+        replyChars: reply.length,
+      })
     }
     const parsed = parsedJson === null ? null : ChunkNotesSchema.safeParse(parsedJson)
     if (parsed?.success) allNotes.push(parsed.data)
-    else if (parsed) console.warn(`[summarize] chunk ${i} notes failed validation — skipped`, parsed.error.issues.slice(0, 2))
+    else if (parsed) {
+      log.warn('summarize', 'chunk notes failed validation - skipped', {
+        chunk: i,
+        issues: parsed.error.issues.slice(0, 2).map((x) => `${x.code}@${x.path.join('.')}`),
+      })
+    }
     input.onProgress(Math.round(((i + 1) / (chunks.length + 1)) * 80))
   }
   if (allNotes.length === 0) throw new Error('every map chunk failed validation')
@@ -210,9 +220,16 @@ export async function summarizeMeeting(input: {
     try {
       const parsed = SummarySchema.safeParse(JSON.parse(reply))
       if (parsed.success) summary = parsed.data
-      else console.warn('[summarize] reduce validation failed', parsed.error.issues.slice(0, 3))
-    } catch (e) {
-      console.warn('[summarize] reduce JSON parse failed', String(e).slice(0, 120))
+      else {
+        log.warn('summarize', 'reduce validation failed', {
+          issues: parsed.error.issues.slice(0, 3).map((x) => `${x.code}@${x.path.join('.')}`),
+        })
+      }
+    } catch {
+      // The exception is deliberately not bound: a JSON parse error quotes the
+      // input it choked on, and the input here is model output, which never
+      // reaches a log (CLAUDE.md invariant).
+      log.warn('summarize', 'reduce reply was not valid JSON')
     }
   }
   if (!summary) {
@@ -252,5 +269,8 @@ export async function summarizeMeeting(input: {
     throw e
   }
   input.onProgress(100)
-  return { summary, degraded }
+  // The map notes are returned so the pipeline can persist them in this job's
+  // checkpoint: the Q&A report consumes them instead of re-reading the whole
+  // transcript, turning a second map-reduce into a single call.
+  return { summary, degraded, notes: allNotes }
 }

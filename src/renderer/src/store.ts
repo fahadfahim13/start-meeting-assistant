@@ -1,17 +1,20 @@
 import { create } from 'zustand'
 import type { DeviceInventory } from '@shared/schemas/devices'
-import type { CaptureConfig, QualityPreset, SessionStatus, ValidationResult } from '@shared/schemas/capture'
+import type { SessionStatus, ValidationResult } from '@shared/schemas/capture'
+import { QUALITY_PROFILES } from '@shared/schemas/capture'
 import { api } from './api'
+import {
+  buildConfig,
+  enabledButUnavailable,
+  type ConfigSource,
+  type Selection,
+} from './capture-config'
+
+// Re-exported so components import capture concerns from one place.
+export { buildConfig, enabledButUnavailable }
+export type { ConfigSource, Selection }
 import { startLoopback, type LoopbackHandle } from './audio/loopback'
 
-interface Selection {
-  screenId: string | null
-  cameraDeviceId: string | null
-  microphoneDeviceId: string | null
-  systemAudio: boolean
-  preset: QualityPreset
-  title: string
-}
 
 interface AppState {
   inventory: DeviceInventory | null
@@ -36,34 +39,8 @@ interface AppState {
 
 let loopback: LoopbackHandle | null = null
 let levelTimer: ReturnType<typeof setInterval> | null = null
+let validateTimer: ReturnType<typeof setTimeout> | null = null
 
-function buildConfig(state: AppState): CaptureConfig {
-  const inv = state.inventory
-  const sel = state.selection
-  const screen = inv?.screens.find((s) => s.id === sel.screenId) ?? null
-  const camera = inv?.cameras.find((c) => c.deviceId === sel.cameraDeviceId) ?? null
-  const mic = inv?.microphones.find((m) => m.deviceId === sel.microphoneDeviceId) ?? null
-
-  return {
-    title: sel.title || `Meeting ${new Date().toLocaleString()}`,
-    preset: sel.preset,
-    screen: screen
-      ? {
-          sourceId: screen.id,
-          kind: screen.kind,
-          displayIndex: screen.displayIndex,
-          windowTitle: screen.kind === 'window' ? screen.name : null,
-          label:
-            screen.kind === 'window'
-              ? screen.name.slice(0, 256)
-              : `Screen ${(screen.displayIndex ?? 0) + 1}`,
-        }
-      : null,
-    camera: camera?.dshowName ? { dshowName: camera.dshowName } : null,
-    microphone: mic?.dshowName ? { dshowName: mic.dshowName } : null,
-    systemAudio: sel.systemAudio,
-  }
-}
 
 export const useStore = create<AppState>((set, get) => {
   // Session state pushed from main.
@@ -77,7 +54,11 @@ export const useStore = create<AppState>((set, get) => {
     selection: {
       screenId: null,
       cameraDeviceId: null,
+      // Seeded once from the preset's cameraEnabledDefault on the first device
+      // enumeration. Never re-seeded: an explicit choice outranks a default.
+      cameraEnabled: true,
       microphoneDeviceId: null,
+      microphoneEnabled: true,
       systemAudio: true,
       preset: 'balanced',
       title: '',
@@ -113,13 +94,20 @@ export const useStore = create<AppState>((set, get) => {
         }
         const inv = result.data
         const sel = get().selection
+        const firstRun = get().inventory === null
         set({
           inventory: inv,
           selection: {
             ...sel,
             screenId: sel.screenId ?? inv.screens.find((s) => s.kind === 'screen')?.id ?? null,
+            // Auto-pick a device only when none is remembered. The toggles are
+            // untouched here: re-enumerating hardware is not a reason to
+            // re-enable a source the user deliberately switched off.
             cameraDeviceId: sel.cameraDeviceId ?? inv.cameras.find((c) => !c.isVirtual)?.deviceId ?? null,
             microphoneDeviceId: sel.microphoneDeviceId ?? inv.microphones[0]?.deviceId ?? null,
+            cameraEnabled: firstRun
+              ? QUALITY_PROFILES[sel.preset].cameraEnabledDefault
+              : sel.cameraEnabled,
           },
         })
       } catch (e) {
@@ -129,6 +117,17 @@ export const useStore = create<AppState>((set, get) => {
 
     select(patch) {
       set({ selection: { ...get().selection, ...patch }, validation: null })
+      // Validate as the setup changes rather than only when someone presses
+      // "Check setup" - which nobody does. session:validate already warns
+      // correctly about a silent configuration; it was simply never seen.
+      // Cheap: probeCapabilities() is memoised (M-016) and the disk check is a
+      // statfs. Title keystrokes are excluded - they cannot invalidate anything.
+      if (Object.keys(patch).length === 1 && 'title' in patch) return
+      if (validateTimer) clearTimeout(validateTimer)
+      validateTimer = setTimeout(() => {
+        validateTimer = null
+        void get().validate()
+      }, 400)
     },
 
     async validate() {

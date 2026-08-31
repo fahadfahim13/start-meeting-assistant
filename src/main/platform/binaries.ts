@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { AppError } from '@shared/errors'
+import { log } from '@main/log'
 
 /**
  * The single place binary paths come from (invariant: nothing else may decide
@@ -28,7 +29,7 @@ export function resolveBinary(name: BinaryName): string {
   if (!app.isPackaged) {
     if (!DEV_WARNED.has(name)) {
       DEV_WARNED.add(name)
-      console.warn(`[binaries] dev fallback: resolving "${name}" from PATH (bundle it in resources/bin for production behaviour)`)
+      log.warn('binaries', 'dev fallback: resolving from PATH', { name })
     }
     return exe // PATH lookup — dev only
   }

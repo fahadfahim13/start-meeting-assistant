@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import os from 'node:os'
 import { getDb } from '@main/db'
+import { log } from '@main/log'
+import type { ErrorCode } from '@shared/errors'
 
 /**
  * Resumable job queue (plan §8.3, ADR-006). SQLite-backed, ONE worker —
@@ -31,7 +33,20 @@ export interface StageContext {
   setCheckpoint(data: object): void
 }
 
-export type StageRunner = (ctx: StageContext) => Promise<'done' | 'skipped'>
+/**
+ * A stage may return a bare state, or a state WITH a reason.
+ *
+ * The bare form keeps every existing stage body compiling; the object form is
+ * how a stage explains itself. `skipped` carrying a code is the important case:
+ * a skip with no reason renders identically to "still queued" and leaves the
+ * user staring at "No summary yet" on a pipeline that finished ten minutes ago.
+ */
+export type StageOutcome =
+  | 'done'
+  | 'skipped'
+  | { state: 'done' | 'skipped'; code?: ErrorCode; detail?: string }
+
+export type StageRunner = (ctx: StageContext) => Promise<StageOutcome>
 
 export interface QueueEvents {
   onJobUpdate(job: JobRow): void
@@ -48,7 +63,14 @@ export class JobQueue {
     this.stages.set(name, runner)
   }
 
-  /** Crash cleanup: anything 'running' at boot was interrupted. */
+  /**
+   * Crash cleanup: anything 'running' at boot was interrupted.
+   *
+   * This path deliberately PRESERVES checkpoints — it is resume, and a stage
+   * that persisted half its work should not redo it. `enqueue` and `retry`
+   * deliberately DISCARD them, because those mean "the result was wrong, start
+   * over". Three paths, three different intents; do not unify them.
+   */
   resetInterrupted(): void {
     getDb().prepare(`UPDATE jobs SET state = 'pending' WHERE state = 'running'`).run()
   }
@@ -56,9 +78,13 @@ export class JobQueue {
   enqueue(meetingId: string, stages: string[]): void {
     const db = getDb()
     const insert = db.prepare(
+      // checkpoint = NULL is not optional: transcribe's checkpoint records which
+      // tracks it already handled, so re-processing a meeting whose transcribe
+      // "succeeded" with zero segments short-circuited straight back to done and
+      // did nothing at all. Re-running was a no-op precisely for broken meetings.
       `INSERT INTO jobs (id, meeting_id, stage, state) VALUES (?, ?, ?, 'pending')
        ON CONFLICT(meeting_id, stage) DO UPDATE SET state = 'pending', attempts = 0,
-         error_code = NULL, error_detail = NULL, progress = 0`,
+         error_code = NULL, error_detail = NULL, progress = 0, checkpoint = NULL`,
     )
     for (const stage of stages) insert.run(randomUUID(), meetingId, stage)
     void this.pump()
@@ -66,7 +92,10 @@ export class JobQueue {
 
   retry(jobId: string): void {
     getDb()
-      .prepare(`UPDATE jobs SET state = 'pending', attempts = 0, error_code = NULL, error_detail = NULL WHERE id = ?`)
+      .prepare(
+        `UPDATE jobs SET state = 'pending', attempts = 0, error_code = NULL,
+           error_detail = NULL, checkpoint = NULL WHERE id = ?`,
+      )
       .run(jobId)
     void this.pump()
   }
@@ -117,11 +146,35 @@ export class JobQueue {
 
     try {
       const outcome = await runner(ctx)
-      this.update(job.id, { state: outcome, progress: 100, finished_at: Date.now() })
+      const normalised = typeof outcome === 'string' ? { state: outcome } : outcome
+      // error_code/error_detail are reused for skip reasons rather than adding
+      // columns: enqueue() and retry() already null them, which is exactly the
+      // lifecycle an outcome reason wants. See DECISIONS.md.
+      this.update(job.id, {
+        state: normalised.state,
+        progress: 100,
+        finished_at: Date.now(),
+        error_code: normalised.code ?? null,
+        error_detail: normalised.detail ? normalised.detail.slice(0, 1000) : null,
+      })
+      if (normalised.code) {
+        log.info('pipeline', 'stage finished with a reason', {
+          stage: job.stage,
+          meetingId: job.meeting_id,
+          state: normalised.state,
+          reason: normalised.code,
+        })
+      }
     } catch (e) {
       const attempts = job.attempts + 1
       const max = job.max_attempts
-      console.error(`[queue] ${job.stage}/${job.meeting_id} attempt ${attempts}:`, e)
+      log.error('pipeline', 'stage attempt failed', {
+        stage: job.stage,
+        meetingId: job.meeting_id,
+        attempt: attempts,
+        maxAttempts: max,
+        error: String(e).slice(0, 800),
+      })
       if (attempts < max) {
         this.update(job.id, { state: 'pending', error_detail: String(e).slice(0, 1000) })
         // Exponential backoff before the next pump pass picks it up again.

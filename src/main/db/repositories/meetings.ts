@@ -16,6 +16,8 @@ export interface MeetingRow {
   duration_ms: number | null
   state: MeetingState
   media_path: string
+  /** Which root media_path is relative to: 'userData' or 'custom'. */
+  media_root: string
   media_bytes: number | null
   capture_profile: string
   has_screen: number
@@ -39,6 +41,8 @@ export function createMeeting(input: {
   id: string
   title: string
   mediaPath: string
+  /** Root mediaPath is relative to; new recordings follow the current setting. */
+  mediaRoot: string
   captureProfile: object
   hasScreen: boolean
   hasCamera: boolean
@@ -49,15 +53,16 @@ export function createMeeting(input: {
   getDb()
     .prepare(
       `INSERT INTO meetings
-        (id, title, started_at, state, media_path, capture_profile,
+        (id, title, started_at, state, media_path, media_root, capture_profile,
          has_screen, has_camera, has_mic, has_system_audio, created_at, updated_at)
-       VALUES (?, ?, ?, 'recording', ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, 'recording', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       input.id,
       input.title,
       now,
       input.mediaPath,
+      input.mediaRoot,
       JSON.stringify(input.captureProfile),
       input.hasScreen ? 1 : 0,
       input.hasCamera ? 1 : 0,

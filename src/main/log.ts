@@ -19,8 +19,14 @@ let redactions: [string, string][] = []
 
 function ensure(): string {
   if (logDir) return logDir
+  // Best-effort: logging is a diagnostic, never a dependency. If the directory
+  // cannot be created the writes below fail harmlessly into their own catch.
   logDir = path.join(app.getPath('userData'), 'logs')
-  mkdirSync(logDir, { recursive: true })
+  try {
+    mkdirSync(logDir, { recursive: true })
+  } catch {
+    /* the append will fail and be swallowed too */
+  }
   redactions = [
     [app.getPath('userData'), '<data>'],
     [app.getPath('home'), '<home>'],
@@ -46,6 +52,17 @@ function redact(value: string): string {
   return out
 }
 
+/**
+ * Same redaction, for text leaving main by a route other than the log — chiefly
+ * `jobs.error_detail`, which can hold an ffmpeg stderr tail full of absolute
+ * paths and is now rendered in the Library. `ensure()` populates the table, so
+ * call it first rather than depending on a log line having happened.
+ */
+export function redactPaths(value: string): string {
+  ensure()
+  return redact(value)
+}
+
 /** Wrap meeting-derived text: the log records only that it existed, and its size. */
 export function content(text: string | null | undefined): { redactedContent: true; length: number } {
   return { redactedContent: true, length: text?.length ?? 0 }
@@ -55,12 +72,17 @@ type Level = 'debug' | 'info' | 'warn' | 'error'
 
 function write(level: Level, area: string, message: string, extra?: object): void {
   const dir = ensure()
+  // `extra` is spread FIRST so a caller's field can never clobber the envelope.
+  // It can: a stage logging `{ level: 'very-quiet' }` overwrote the log level
+  // and produced a line claiming to be at level "very-quiet", which silently
+  // breaks every filter over these logs. Callers own their keys; the envelope
+  // owns t/level/area/msg.
   const line = JSON.stringify({
+    ...(extra ? JSON.parse(redact(JSON.stringify(extra))) : {}),
     t: new Date().toISOString(),
     level,
     area,
     msg: redact(message),
-    ...(extra ? JSON.parse(redact(JSON.stringify(extra))) : {}),
   })
   const file = path.join(dir, `meetfroge-${new Date().toISOString().slice(0, 10)}.log`)
   try {

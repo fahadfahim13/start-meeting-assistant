@@ -102,3 +102,100 @@ export function renderTranscript(format: TranscriptFormat, rows: TranscriptRow[]
       return toMd(rows, title)
   }
 }
+
+// ---- Q&A report ------------------------------------------------------------
+
+export type QaFormat = 'md' | 'txt' | 'json'
+
+export interface QaExportPair {
+  q: string
+  a: string
+  t: number | null
+}
+
+export function qaToMd(pairs: QaExportPair[], title: string, degraded: boolean): string {
+  const lines = [`# ${title} — Q&A`, '']
+  if (degraded) {
+    lines.push('> Assembled from the stored summary: the model pass failed validation.', '')
+  }
+  for (const p of pairs) {
+    lines.push(`### ${p.q}`)
+    lines.push(p.t === null ? p.a : `${p.a} _(${clockTime(p.t)})_`)
+    lines.push('')
+  }
+  return lines.join('\n')
+}
+
+export function qaToTxt(pairs: QaExportPair[]): string {
+  return (
+    pairs
+      .map((p) => `Q: ${p.q}\nA: ${p.a}${p.t === null ? '' : ` [${clockTime(p.t)}]`}`)
+      .join('\n\n') + '\n'
+  )
+}
+
+export function qaToJson(pairs: QaExportPair[], degraded: boolean): string {
+  return JSON.stringify({ version: 1, degraded, pairs }, null, 2)
+}
+
+export function renderQa(
+  format: QaFormat,
+  pairs: QaExportPair[],
+  title: string,
+  degraded: boolean,
+): string {
+  switch (format) {
+    case 'md':
+      return qaToMd(pairs, title, degraded)
+    case 'txt':
+      return qaToTxt(pairs)
+    case 'json':
+      return qaToJson(pairs, degraded)
+  }
+}
+
+// ---- summary ---------------------------------------------------------------
+
+export interface SummaryExport {
+  title?: string
+  tldr?: string
+  summary?: string
+  key_points?: string[]
+  decisions?: { text: string; t?: number }[]
+  open_questions?: string[]
+  degraded?: boolean
+}
+
+export function summaryToMd(
+  summary: SummaryExport,
+  meetingTitle: string,
+  actionItems: { text: string; assignee: string | null; t: number | null }[],
+): string {
+  const lines: string[] = [`# ${summary.title || meetingTitle}`, '']
+  if (summary.degraded) {
+    lines.push('> Structured summarization failed — these are the merged raw notes.', '')
+  }
+  if (summary.tldr) lines.push(summary.tldr, '')
+  if (summary.summary) lines.push(summary.summary, '')
+  const section = (heading: string, items: string[]): void => {
+    if (items.length === 0) return
+    lines.push(`## ${heading}`, '')
+    for (const i of items) lines.push(`- ${i}`)
+    lines.push('')
+  }
+  section('Key points', summary.key_points ?? [])
+  section(
+    'Decisions',
+    (summary.decisions ?? []).map((d) => (d.t === undefined ? d.text : `${d.text} _(${clockTime(d.t)})_`)),
+  )
+  section(
+    'Action items',
+    actionItems.map((a) => {
+      const who = a.assignee ? `**${a.assignee}** — ` : ''
+      const when = a.t === null ? '' : ` _(${clockTime(a.t)})_`
+      return `${who}${a.text}${when}`
+    }),
+  )
+  section('Open questions', summary.open_questions ?? [])
+  return lines.join('\n')
+}

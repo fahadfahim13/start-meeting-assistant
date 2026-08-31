@@ -1,5 +1,5 @@
 import { app, ipcMain } from 'electron'
-import { writeFileSync, mkdirSync, statSync } from 'node:fs'
+import { writeFileSync, mkdirSync, rmSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { createMainWindow, hardenSession, registerFrameScheme } from './window'
 import { handle } from './ipc/gateway'
@@ -10,15 +10,24 @@ import { recoverInterrupted, type RecoveryReport } from './capture/recovery'
 import { getDb, closeDb } from './db'
 import { initTray, updateTray, destroyTray } from './tray'
 import { createPipeline, PROCESSING_STAGES } from './pipeline'
-import { renderTranscript } from './pipeline/export'
+import { renderQa, renderTranscript } from './pipeline/export'
 import * as meetingsRepo from './db/repositories/meetings'
 import * as transcriptsRepo from './db/repositories/transcripts'
 import { getSettings, patchSettings } from './db/repositories/settings'
 import { verifyBinaries } from './security/integrity'
-import { log } from './log'
+import { log, redactPaths } from './log'
 import { MODEL_IDS, modelStatus, modelsDir, type ModelId } from './platform/models'
 import { MODEL_REGISTRY } from './platform/model-registry'
 import { cancelDownload, downloadModel } from './platform/model-downloader'
+import {
+  currentRootKind,
+  hasRoomToRecord,
+  recordingsRoot,
+  relativizeMedia,
+  resolveMedia,
+  rootAvailable,
+  validateRecordingsFolder,
+} from './platform/storage'
 
 /** Harness output dir: asar is read-only, so packaged runs write to userData (M-017). */
 function harnessOutDir(): string {
@@ -63,6 +72,14 @@ function bootstrap(): void {
         else void verifyAndExit(outputPath)
         return
       }
+      // B8: the setting finally does what its label says. It was defined,
+      // written by Settings, and read by nothing — "Process automatically when
+      // a recording stops" could not be turned off. Checked AFTER the harness
+      // hook above, because harnesses must not be gated on a user preference.
+      if (!getSettings().autoProcess) {
+        log.info('pipeline', 'auto-process is off - meeting left unprocessed', { meetingId })
+        return
+      }
       pipeline.enqueue(meetingId, PROCESSING_STAGES)
     },
   })
@@ -73,15 +90,22 @@ function bootstrap(): void {
 
   handle('devices:screenPreview', async ({ sourceId }) => {
     const { desktopCapturer } = await import('electron')
+    // Narrow to the kind we actually want. Asking for windows too made Chromium
+    // run Windows Graphics Capture over EVERY open window on each poll, just to
+    // discard all but one — and any window WGC cannot capture logged
+    // `Failed to start capture: E_INVALIDARG` every single time. On an idle app
+    // that was one error every ~2 s, forever, plus a full desktop thumbnail
+    // sweep on a 15 W laptop (M-021's neighbour; see docs/risks.md).
+    const kind: 'screen' | 'window' = sourceId.startsWith('screen:') ? 'screen' : 'window'
     const sources = await desktopCapturer.getSources({
-      types: ['screen', 'window'],
-      thumbnailSize: { width: 640, height: 360 },
+      types: [kind],
+      thumbnailSize: { width: 480, height: 270 },
       fetchWindowIcons: false,
     })
     const src = sources.find((x) => x.id === sourceId)
-    return {
-      thumbnailDataUrl: src && !src.thumbnail.isEmpty() ? src.thumbnail.toDataURL() : null,
-    }
+    if (!src) return { thumbnailDataUrl: null, status: 'not-found' as const }
+    if (src.thumbnail.isEmpty()) return { thumbnailDataUrl: null, status: 'empty' as const }
+    return { thumbnailDataUrl: src.thumbnail.toDataURL(), status: 'ok' as const }
   })
   handle('session:validate', (config) => sessions.validate(config))
   handle('session:start', async (config) => ({ meetingId: await sessions.start(config) }))
@@ -114,7 +138,17 @@ function bootstrap(): void {
             .prepare('SELECT t.name FROM meeting_tags mt JOIN tags t ON t.id = mt.tag_id WHERE mt.meeting_id = ?')
             .all(m.id) as unknown as { name: string }[]
         ).map((t) => t.name),
-        jobs: pipeline.jobsFor(m.id).map((j) => ({ stage: j.stage, state: j.state, progress: j.progress })),
+        jobs: pipeline.jobsFor(m.id).map((j) => ({
+          id: j.id,
+          stage: j.stage,
+          state: j.state,
+          progress: j.progress,
+          errorCode: j.error_code,
+          // error_detail can be an ffmpeg stderr tail carrying absolute paths.
+          errorDetail: j.error_detail ? redactPaths(j.error_detail) : null,
+          attempts: j.attempts,
+          maxAttempts: j.max_attempts,
+        })),
       })),
     }
   })
@@ -195,6 +229,42 @@ function bootstrap(): void {
     }
   })
 
+  handle('settings:chooseRecordingsFolder', async () => {
+    const { dialog } = await import('electron')
+    const picked = await dialog.showOpenDialog({
+      title: 'Choose where new recordings are saved',
+      defaultPath: recordingsRoot(),
+      properties: ['openDirectory', 'createDirectory'],
+    })
+    if (picked.canceled || !picked.filePaths[0]) {
+      return { ok: false, path: null, reason: null }
+    }
+    const chosen = picked.filePaths[0]
+
+    const valid = validateRecordingsFolder(chosen)
+    if (!valid.ok) return { ok: false, path: null, reason: valid.reason }
+
+    const room = await hasRoomToRecord(chosen)
+    if (!room.ok) {
+      return {
+        ok: false,
+        path: null,
+        reason: `That drive has less than 5 GB free (${(room.freeBytes / 1024 ** 3).toFixed(1)} GB). Recordings need room to grow.`,
+      }
+    }
+
+    // Written here, main-internal — never accepted from the renderer.
+    patchSettings({ recordingsDir: chosen })
+    log.info('storage', 'recordings folder changed', { isDefault: false })
+    return { ok: true, path: chosen, reason: null }
+  })
+
+  handle('settings:resetRecordingsFolder', async () => {
+    patchSettings({ recordingsDir: null })
+    log.info('storage', 'recordings folder reset to default')
+    return { ok: true, path: recordingsRoot() }
+  })
+
   handle('settings:get', async () => {
     const s = getSettings()
     const caps = await probeCapabilities()
@@ -202,6 +272,9 @@ function bootstrap(): void {
       ...s,
       modelsDir: modelsDir(),
       recordingsDir: sessions.recordingsDir(),
+      recordingsDirIsDefault: currentRootKind() === 'userData',
+      recordingsDirWritable: rootAvailable().ok,
+      writeSidecarFiles: s.writeSidecarFiles,
       models: MODEL_IDS.map((id) => ({
         ...modelStatus(id),
         purpose: MODEL_REGISTRY[id].purpose,
@@ -230,15 +303,34 @@ function bootstrap(): void {
     return { ok: true }
   })
 
-  handle('meetings:delete', async ({ meetingId }) => {
+  /**
+   * Delete one meeting: media, sidecars, frames, then rows.
+   *
+   * Extracted from the IPC handler so bulk cleanup goes through exactly the
+   * same path rather than a second, less careful implementation.
+   */
+  function deleteMeeting(meetingId: string): { ok: boolean; freedBytes: number } {
     const meeting = meetingsRepo.getMeeting(meetingId)
     if (!meeting) return { ok: false, freedBytes: 0 }
-    const { rmSync } = await import('node:fs')
     let freed = 0
-    const mediaAbs = path.join(app.getPath('userData'), meeting.media_path)
+    // This path used to be a bare path.join with no containment check —
+    // the only media site in the codebase without one, and it feeds an
+    // rmSync(recursive). resolveMedia throws rather than deleting outside
+    // the meeting's own root.
+    const mediaAbs = resolveMedia(meeting)
     try {
       freed += statSync(mediaAbs).size
     } catch { /* already gone */ }
+
+    // The sidecars share the recording's base name; they go with it.
+    const base = mediaAbs.replace(/\.mkv$/i, '')
+    for (const suffix of ['.md', '.srt', '.json', '.summary.md', '.qa.md']) {
+      try {
+        freed += statSync(base + suffix).size
+      } catch { /* not written for this meeting */ }
+      rmSync(base + suffix, { force: true })
+    }
+
     // Media, frames, then rows (FKs cascade transcript/keyframes/summaries).
     rmSync(mediaAbs, { force: true, recursive: true })
     rmSync(path.join(app.getPath('userData'), 'frames', meetingId), { force: true, recursive: true })
@@ -246,7 +338,9 @@ function bootstrap(): void {
     getDb().prepare('DELETE FROM keyframe_fts WHERE meeting_id = ?').run(meetingId)
     getDb().prepare('DELETE FROM meetings WHERE id = ?').run(meetingId)
     return { ok: true, freedBytes: freed }
-  })
+  }
+
+  handle('meetings:delete', async ({ meetingId }) => deleteMeeting(meetingId))
 
   handle('meetings:setTags', async ({ meetingId, tags }) => {
     const db = getDb()
@@ -350,8 +444,72 @@ function bootstrap(): void {
   handle('summary:regenerate', async ({ meetingId }) => {
     const meeting = meetingsRepo.getMeeting(meetingId)
     if (!meeting) return { enqueued: false }
-    pipeline.enqueue(meetingId, ['summarize'])
+    // 'publish' too, so the sidecar files beside the recording reflect the new
+    // summary rather than silently going stale.
+    pipeline.enqueue(meetingId, ['summarize', 'publish'])
     return { enqueued: true }
+  })
+
+  handle('qa:get', async ({ meetingId }) => {
+    const row = getDb()
+      .prepare('SELECT content, generated_at FROM qa_reports WHERE meeting_id = ? AND is_current = 1')
+      .get(meetingId) as unknown as { content: string; generated_at: number } | undefined
+    if (!row) return { report: null }
+    try {
+      const parsed = JSON.parse(row.content) as {
+        pairs?: { q: string; a: string; t: number | null }[]
+        degraded?: boolean
+      }
+      return {
+        report: {
+          pairs: (parsed.pairs ?? []).map((p) => ({ q: p.q, a: p.a, t: p.t ?? null })),
+          degraded: parsed.degraded ?? false,
+          generatedAt: row.generated_at,
+        },
+      }
+    } catch {
+      // A stored row we cannot parse is the same as none, and saying so beats
+      // failing the whole channel.
+      return { report: null }
+    }
+  })
+
+  handle('qa:regenerate', async ({ meetingId }) => {
+    const meeting = meetingsRepo.getMeeting(meetingId)
+    if (!meeting) return { enqueued: false }
+    pipeline.enqueue(meetingId, ['qa', 'publish'])
+    return { enqueued: true }
+  })
+
+  handle('qa:export', async ({ meetingId, format }) => {
+    const meeting = meetingsRepo.getMeeting(meetingId)
+    if (!meeting) return { saved: false, fileName: null }
+    const row = getDb()
+      .prepare('SELECT content FROM qa_reports WHERE meeting_id = ? AND is_current = 1')
+      .get(meetingId) as unknown as { content: string } | undefined
+    if (!row) return { saved: false, fileName: null }
+    let pairs: { q: string; a: string; t: number | null }[] = []
+    let degraded = false
+    try {
+      const parsed = JSON.parse(row.content) as {
+        pairs?: { q: string; a: string; t: number | null }[]
+        degraded?: boolean
+      }
+      pairs = parsed.pairs ?? []
+      degraded = parsed.degraded ?? false
+    } catch {
+      return { saved: false, fileName: null }
+    }
+    const content = renderQa(format, pairs, meeting.title, degraded)
+    const { dialog } = await import('electron')
+    const safeName = meeting.title.replace(/[<>:"/\\|?*]/g, '_').slice(0, 80)
+    const result = await dialog.showSaveDialog({
+      defaultPath: `${safeName}-qa.${format}`,
+      filters: [{ name: format.toUpperCase(), extensions: [format] }],
+    })
+    if (result.canceled || !result.filePath) return { saved: false, fileName: null }
+    writeFileSync(result.filePath, content, 'utf8')
+    return { saved: true, fileName: path.basename(result.filePath) }
   })
 
   handle('actionitem:toggle', async ({ actionItemId, done }) => {
@@ -396,7 +554,11 @@ function bootstrap(): void {
       pipeline.resetInterrupted()
       void pipeline.pump()
     } catch (e) {
-      console.error('[db] startup failed:', e)
+      // A throw here meant resetInterrupted() and pump() never ran, so every
+      // pending job stayed frozen for the session with no visible sign.
+      log.error('db', 'startup failed - pipeline will not run this session', {
+        error: String(e).slice(0, 500),
+      })
     }
 
     mainWindow = createMainWindow()
@@ -404,10 +566,12 @@ function bootstrap(): void {
 
     // Probe in the background after first paint; results are cached.
     void probeCapabilities().then((caps) => {
-      console.log(
-        `[probe] encoders: ${caps.workingEncoders.join(', ') || 'NONE'} ` +
-          `(ddagrab=${caps.ddagrabWorks} gdigrab=${caps.gdigrabWorks}, ${caps.probeDurationMs}ms)`,
-      )
+      log.info('probe', 'capabilities probed', {
+        encoders: caps.workingEncoders,
+        ddagrab: caps.ddagrabWorks,
+        gdigrab: caps.gdigrabWorks,
+        durationMs: caps.probeDurationMs,
+      })
     })
 
     // Smoke mode (M-004: Electron has no stdout on Windows — assert on files
@@ -428,18 +592,83 @@ function bootstrap(): void {
         const baseName = `synthetic_${meetingId.slice(0, 8)}`
         const dest = path.join(sessions.recordingsDir(), `${baseName}.mkv`)
         copyFileSync(processFile, dest)
+        // Derive the audio flags from the file rather than hardcoding them to
+        // false: the honesty harness feeds in a file WITH audio and needs the
+        // extract/transcribe stages to actually run on it. A video-only file
+        // still yields 0 tracks, so the visual harness is unaffected.
+        const { countAudioTracks } = await import('./capture/media-tools')
+        const audioTracks = await countAudioTracks(dest)
         meetingsRepo.createMeeting({
           id: meetingId,
-          title: 'Synthetic visual test',
-          mediaPath: path.join('recordings', `${baseName}.mkv`),
+          title: 'Synthetic pipeline test',
+          mediaPath: relativizeMedia(dest).relative,
+          mediaRoot: currentRootKind(),
           captureProfile: { synthetic: true },
           hasScreen: true,
           hasCamera: false,
-          hasMic: false,
-          hasSystemAudio: false,
+          hasMic: audioTracks >= 1,
+          hasSystemAudio: audioTracks >= 2,
         })
-        meetingsRepo.finalizeMeeting(meetingId, path.join('recordings', `${baseName}.mkv`), statSync(dest).size, 0)
+        meetingsRepo.finalizeMeeting(meetingId, relativizeMedia(dest).relative, statSync(dest).size, 0)
         void processAndExit(meetingId)
+      })()
+    }
+
+    // Test hook: generate the Q&A report for an existing meeting and dump it.
+    // The Q&A stage is deliberately not part of PROCESSING_STAGES (it runs on a
+    // button), so the normal harness path cannot reach it.
+    const qaMeeting = process.env['MEETFROGE_QA_MEETING']
+    if (qaMeeting) void qaAndExit(qaMeeting)
+
+    // Maintenance hook: delete EVERY meeting through the same code path the
+    // Library's delete button uses, and report per-meeting outcomes. Destructive
+    // and irreversible, so it is opt-in by an explicit env var and writes a
+    // manifest of what it removed.
+    if (process.env['MEETFROGE_DELETE_ALL'] === 'yes-delete-everything') {
+      void (async () => {
+        const outDir = harnessOutDir()
+        mkdirSync(outDir, { recursive: true })
+        const ids = (
+          getDb().prepare('SELECT id, title FROM meetings ORDER BY created_at').all() as unknown as {
+            id: string
+            title: string
+          }[]
+        ).map((r) => r.id)
+        const results: { id: string; ok: boolean; freedBytes: number; error?: string }[] = []
+        for (const id of ids) {
+          try {
+            results.push({ id, ...deleteMeeting(id) })
+          } catch (e) {
+            // Report per meeting rather than a single boolean: a throw partway
+            // would otherwise leave the DB and disk disagreeing with no record.
+            results.push({ id, ok: false, freedBytes: 0, error: String(e).slice(0, 200) })
+          }
+        }
+        const remaining = (
+          getDb().prepare('SELECT COUNT(*) c FROM meetings').get() as unknown as { c: number }
+        ).c
+        writeFileSync(
+          path.join(outDir, 'delete-all.json'),
+          JSON.stringify(
+            {
+              deleteAll: true,
+              date: new Date().toISOString(),
+              attempted: ids.length,
+              deleted: results.filter((r) => r.ok).length,
+              failed: results.filter((r) => !r.ok),
+              freedBytes: results.reduce((n, r) => n + r.freedBytes, 0),
+              remaining,
+            },
+            null,
+            2,
+          ),
+        )
+        log.warn('maintenance', 'bulk delete complete', {
+          attempted: ids.length,
+          deleted: results.filter((r) => r.ok).length,
+          remaining,
+        })
+        app.quit()
       })()
     }
   })
@@ -527,6 +756,39 @@ function bootstrap(): void {
   }
 
   /** Transcription E2E: run the pipeline on the finished meeting, dump results. */
+  async function qaAndExit(meetingId: string): Promise<void> {
+    const outDir = harnessOutDir()
+    mkdirSync(outDir, { recursive: true })
+    let result: Record<string, unknown>
+    try {
+      pipeline.enqueue(meetingId, ['qa', 'publish'])
+      const terminal = new Set(['done', 'failed', 'cancelled', 'skipped'])
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 2000))
+        const job = pipeline.jobsFor(meetingId).find((j) => j.stage === 'qa')
+        if (job && terminal.has(job.state)) break
+      }
+      const job = pipeline.jobsFor(meetingId).find((j) => j.stage === 'qa')
+      const row = getDb()
+        .prepare('SELECT content, generated_at FROM qa_reports WHERE meeting_id = ? AND is_current = 1')
+        .get(meetingId) as unknown as { content: string; generated_at: number } | undefined
+      const report = row ? (JSON.parse(row.content) as { pairs: unknown[]; degraded: boolean }) : null
+      result = {
+        qaE2e: true,
+        date: new Date().toISOString(),
+        meetingId,
+        job: job ? { state: job.state, errorCode: job.error_code, error: job.error_detail } : null,
+        degraded: report?.degraded ?? null,
+        pairCount: report?.pairs.length ?? 0,
+        pairs: report?.pairs ?? [],
+      }
+    } catch (e) {
+      result = { qaE2e: true, error: String(e).slice(0, 500) }
+    }
+    writeFileSync(path.join(outDir, 'qa-e2e.json'), JSON.stringify(result, null, 2))
+    app.quit()
+  }
+
   async function processAndExit(meetingId: string): Promise<void> {
     pipeline.enqueue(meetingId, PROCESSING_STAGES)
     const terminal = new Set(['done', 'failed', 'cancelled', 'skipped'])
@@ -566,7 +828,14 @@ function bootstrap(): void {
       date: new Date().toISOString(),
       meetingId,
       summary: summaryDump,
-      jobs: jobs.map((j) => ({ stage: j.stage, state: j.state, error: j.error_detail })),
+      // errorCode is the assertable part: a harness can check that a stage
+      // skipped for the RIGHT reason, not merely that it skipped.
+      jobs: jobs.map((j) => ({
+        stage: j.stage,
+        state: j.state,
+        errorCode: j.error_code,
+        error: j.error_detail,
+      })),
       segmentCount: segments.length,
       segments: segments.map((s) => ({
         track: s.track,

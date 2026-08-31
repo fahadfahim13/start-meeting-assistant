@@ -13,14 +13,13 @@
 // NOTE: opens a browser window with the slideshow; close it afterwards.
 
 import { spawn } from 'node:child_process'
-import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const resultFile = path.join(root, 'out', 'transcribe-e2e.json')
-const recDir = path.join(process.env.APPDATA ?? '', 'meetfroge', 'recordings')
 const RECORD_S = 40
 const WORDS = ['ALPHA', 'BRAVO', 'CHARLIE', 'DELTA', 'ECHO', 'FOXTROT']
 const SLIDE_MS = 6000
@@ -42,13 +41,6 @@ const slidesHtml = `<!doctype html><html><head><title>MeetFroge visual test</tit
 const slidesPath = path.join(os.tmpdir(), 'meetfroge-slides.html')
 writeFileSync(slidesPath, slidesHtml)
 
-const listRecordings = () => {
-  try {
-    return new Set(readdirSync(recDir))
-  } catch {
-    return new Set()
-  }
-}
 
 rmSync(resultFile, { force: true })
 

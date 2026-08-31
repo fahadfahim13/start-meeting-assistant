@@ -5,6 +5,15 @@ import path from 'node:path'
 import type { Capabilities, EncoderId } from '@shared/schemas/devices'
 import { CapabilitiesSchema } from '@shared/schemas/devices'
 import { resolveBinary } from './binaries'
+import { gdigrabFilter } from '@main/capture/ffmpeg-builder'
+import { log } from '@main/log'
+
+/**
+ * Bump when the probe suite changes. Any cache written by an older suite fails
+ * CapabilitiesSchema.parse and is silently replaced by a fresh probe.
+ * v2: gdigrab is probed through the production encoder + filter chain (M-021).
+ */
+const PROBE_VERSION = 2
 
 /**
  * Detects what this machine can actually do by RUNNING short real encodes.
@@ -120,22 +129,18 @@ async function doProbe(force: boolean): Promise<Capabilities> {
 
   if (!force && !forcedEncoder) {
     try {
+      // A cache from an older probe suite lacks `probeVersion` (or carries an
+      // older one), so this parse throws and we fall through to a real probe.
       const cached = CapabilitiesSchema.parse(JSON.parse(readFileSync(cachePath(), 'utf8')))
-      // Cache is only valid for the same ffmpeg build; a driver change is caught
-      // by the user-facing "re-detect" action (settings), and Phase 2 adds
-      // re-probe on driver-version change.
-      if (cached.ffmpegVersion === version) return cached
+      // Cache is only valid for the same ffmpeg build AND the same probe suite;
+      // a driver change is caught by the user-facing "re-detect" action.
+      if (cached.ffmpegVersion === version && cached.probeVersion === PROBE_VERSION) return cached
     } catch {
       // no cache / invalid cache — fall through to a real probe
     }
   }
 
   const started = Date.now()
-
-  const gdigrabWorks = await runProbe([
-    '-f', 'gdigrab', '-framerate', '5', '-i', 'desktop',
-    '-t', '1', '-c:v', 'libx264', '-preset', 'ultrafast', '-f', 'null', '-',
-  ])
 
   const workingEncoders: EncoderId[] = []
   let ddagrabWorks = false
@@ -157,10 +162,28 @@ async function doProbe(force: boolean): Promise<Capabilities> {
     ? workingEncoders.filter((e) => e === forcedEncoder || e === `${forcedEncoder}_ultrafast`)
     : workingEncoders
 
+  // gdigrab is probed LAST and through the encoder production will actually
+  // pick, using the exact filter production builds. It previously probed
+  // gdigrab -> libx264 while production ran gdigrab -> h264_amf, so it
+  // certified a chain nobody runs (M-021). It has to come after the ladder
+  // because it needs to know which encoder won.
+  const gdigrabEncoder = finalEncoders[0]
+  // `libx264_ultrafast` is our ladder rung, not an ffmpeg encoder name.
+  const gdigrabCodec = gdigrabEncoder === 'libx264_ultrafast' ? 'libx264' : gdigrabEncoder
+  const gdigrabWorks = gdigrabEncoder && gdigrabCodec
+    ? await runProbe([
+        '-f', 'gdigrab', '-framerate', '5', '-i', 'desktop',
+        '-filter_complex', gdigrabFilter(0, gdigrabEncoder, 5),
+        '-map', '[vscreen]', '-c:v', gdigrabCodec,
+        '-t', '1', '-f', 'null', '-',
+      ])
+    : false
+
   const caps: Capabilities = {
     workingEncoders: finalEncoders,
     ddagrabWorks,
     gdigrabWorks,
+    probeVersion: PROBE_VERSION,
     ffmpegVersion: version,
     probedAt: Date.now(),
     probeDurationMs: Date.now() - started,
@@ -172,7 +195,7 @@ async function doProbe(force: boolean): Promise<Capabilities> {
       mkdirSync(app.getPath('userData'), { recursive: true })
       writeFileSync(cachePath(), JSON.stringify(caps, null, 2))
     } catch (e) {
-      console.warn('[probe] failed to cache capabilities:', e)
+      log.warn('probe', 'failed to cache capabilities', { error: String(e).slice(0, 300) })
     }
   }
 

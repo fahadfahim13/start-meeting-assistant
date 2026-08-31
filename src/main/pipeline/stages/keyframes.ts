@@ -6,6 +6,7 @@ import path from 'node:path'
 import { resolveBinary } from '@main/platform/binaries'
 import { getDb } from '@main/db'
 import { DEFAULT_SELECTION, FRAME_BYTES, pHash, selectKeyframes, type SelectionOptions, type SelectionResult } from './keyframe-select'
+import { log } from '@main/log'
 
 /** Settings presets → selection options (plan §8.4.2 Sensitive/Balanced/Sparse). */
 export const SENSITIVITY_PRESETS: Record<'sensitive' | 'balanced' | 'sparse', SelectionOptions> = {
@@ -63,9 +64,10 @@ export async function extractKeyframes(input: {
   const frames = new Uint8Array(readFileSync(grayPath))
   const selection = selectKeyframes(frames, SENSITIVITY_PRESETS[input.sensitivity ?? 'balanced'])
   if (selection.capped) {
-    console.warn(
-      `[keyframes] cap bound: coverage truncated at ${selection.keyframes.length} keyframes for ${selection.totalFrames}s — surfaced via capture note`,
-    )
+    log.warn('keyframes', 'cap bound - visual coverage truncated', {
+      keyframes: selection.keyframes.length,
+      totalSeconds: selection.totalFrames,
+    })
   }
   input.onProgress(35)
 

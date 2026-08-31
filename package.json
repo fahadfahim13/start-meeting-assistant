@@ -14,7 +14,7 @@
     "dev": "electron-vite dev",
     "build": "npm run typecheck && electron-vite build",
     "preview": "electron-vite preview",
-    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.test.json",
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -22,7 +22,10 @@
     "spike:1": "npm start --prefix spikes/01-loopback",
     "spike:2": "npm start --prefix spikes/02-pcm-pipe",
     "spike:3": "npm run bench:cpu --prefix spikes/03-whisper-vulkan",
-    "spike:4": "npm run bench --prefix spikes/04-llama-vulkan"
+    "spike:4": "npm run bench --prefix spikes/04-llama-vulkan",
+    "test:honesty": "node scripts/pipeline-honesty-test.mjs",
+    "test:qa": "node scripts/qa-test.mjs",
+    "test:storage": "node scripts/storage-root-test.mjs"
   },
   "dependencies": {
     "sherpa-onnx-node": "^1.13.6",

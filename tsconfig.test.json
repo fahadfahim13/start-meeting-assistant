@@ -1,0 +1,31 @@
+{
+  // The test suite was never typechecked: tsconfig.node.json covers src/main,
+  // src/preload and src/shared, tsconfig.web.json covers src/renderer and
+  // src/shared, and `npm run typecheck` runs exactly those two. So a fixture
+  // could drift out of sync with the schema it claims to pin and every test
+  // would still pass, because vitest transpiles without checking.
+  // Found when a CaptureConfig fixture was missing a required field.
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023", "DOM"],
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "baseUrl": ".",
+    "paths": {
+      "@shared/*": ["src/shared/*"],
+      "@main/*": ["src/main/*"],
+      "@renderer/*": ["src/renderer/*"]
+    }
+  },
+  "include": ["tests/**/*", "src/shared/**/*", "src/main/**/*"]
+}

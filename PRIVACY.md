@@ -3,6 +3,24 @@
 MeetFroge records private conversations. That makes privacy the core of the product, not a
 policy page. This document states exactly what happens to your data.
 
+## Where your files are written
+
+By default everything lives under the app's own data directory
+(`%APPDATA%/MeetFroge`): recordings, the database, keyframes and logs.
+
+Settings lets you choose a different folder for **new** recordings. When you do,
+the transcript, summary and Q&A report are written there too, as plain files
+beside the video — `.md`, `.srt`, `.json`, `.summary.md` and `.qa.md`. This is
+deliberate (nothing about your meetings should be locked inside this app), but
+it means **meeting text leaves the app's directory and lands wherever you
+pointed it**. If that folder is a synced drive, a shared network location or a
+removable disk, treat those files as you would any other document containing the
+content of your meetings. You can turn the extra files off in Settings; the
+recording itself still goes to the folder you chose.
+
+Recordings you already have are never moved when you change the folder.
+
+
 ## The commitments
 
 1. **No telemetry.** Not opt-out, not anonymized, not "essential only" — **absent**. There is no

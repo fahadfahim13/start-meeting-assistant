@@ -436,3 +436,387 @@ post-hoc file-based correction is also insufficient. Impact: cross-track interle
 the merged transcript can jitter by ~1 s; each track is internally accurate, and summaries /
 action items (sentence-level) are unaffected. Proper fix is a capture-graph redesign giving
 both audio paths one clock — scoped as future work in docs/risks.md R-11.
+
+---
+
+## M-021 — h264_amf refuses frames under 128×128, so window capture died at frame 0
+
+**Date:** 2026-08-31  **Area:** capture/ffmpeg  **Cost:** two recordings lost outright, ~40 min
+**Symptom:** two window-source recordings ended `state='failed'` with `duration_ms` and
+`media_bytes` NULL and zero pipeline jobs. The only trace was in ffmpeg's stderr:
+`[vost#0:0/h264_amf] Terminating thread with return code -1313558101` … `frame= 0 … Conversion
+failed!`. The same app recording a full screen worked perfectly, minutes apart.
+**Cause (two, compounding):**
+1. `h264_amf` will not initialise below **128×128**. It reports `encoder->Init() failed with
+   error 5`, which ffmpeg surfaces as the uninformative `-22 (Invalid argument)`.
+   Measured on REF-01: 128×128 OK, 320×126 FAIL, 126×240 FAIL, 160×120 FAIL. libx264 encodes
+   every one of those sizes, so this is an AMF limit, not an h264 limit.
+2. gdigrab captures a **minimised** window at its tiny restored-down size — a collapsed Slack
+   window measured **181×25**. The builder mapped gdigrab's output straight to the encoder
+   (`-map 1:v`) with no filter, so nothing stood between a 181×25 frame and AMF.
+   One undersized video source therefore killed all four tracks.
+
+**Not the cause:** the missing `format=nv12`, which was the first suspicion. Verified: a
+full-desktop `gdigrab → h264_amf` chain with raw BGRA and no explicit format encodes fine
+(`frame=29`, exit 0) — ffmpeg's auto-inserted conversion handles it. The size was the whole bug.
+
+**Fix:** every video source now goes through a filter chain; `gdigrabFilter()` pads up to the
+AMF floor and to even dimensions in one expression, `pad=ceil(max(iw,128)/2)*2:ceil(max(ih,128)/2)*2`
+(commas escaped for the filter parser). **Pad, not scale** — upscaling a 181×25 strip would
+silently produce a distorted frame and call it success. The raw `N:v` mapping is gone from the
+builder entirely, so no future source can reach an encoder unfiltered.
+Two supporting fixes landed with it: the capability probe now exercises gdigrab through the
+**encoder production actually picks** (it probed `gdigrab → libx264` while production ran
+`gdigrab → h264_amf`, certifying a chain nobody runs), and `session.start()` re-resolves a
+window's title from its stable `window:<HWND>:<n>` id immediately before spawning, because
+gdigrab matches `title=` exactly and a browser spinner or unread badge changes it.
+
+**Verified:** the full production-shape argv (dshow mic + gdigrab window + h264_amf + segment
+muxer) against the same minimised window: before, `frame= 0` and `Conversion failed!`; after,
+`frame=75`, `seg_000.mkv` written, video stream 182×128 with the audio track intact.
+Pinned by `tests/unit/ffmpeg-builder.test.ts` — "pads a window chain up to the h264_amf floor
+instead of mapping it raw", which asserts no bare `N:v` map survives for any video source.
+
+**Rule:** a hardware encoder has a **minimum** frame size, not just a format and an even-pixel
+requirement — and any capture source whose dimensions the user controls (a window, a region)
+can go below it. Normalise size at the filter, never assume the source is sane. And when an
+encoder fails, read its own error (`encoder->Init() failed with error 5` at `-loglevel verbose`)
+before believing ffmpeg's generic errno.
+
+---
+
+## M-022 — console.* in the main process is a black hole, so two dead recordings logged nothing
+
+**Date:** 2026-08-31  **Area:** tooling/observability  **Cost:** made M-021 far harder to find
+**Symptom:** two recordings failed completely and `%APPDATA%/MeetFroge/logs/` contained exactly
+one line for the whole day: `binary integrity: ok`. There was no record that a recording had
+even been attempted, let alone why it died.
+**Cause:** M-004 established that Electron on Windows is a GUI-subsystem binary whose stdout
+goes nowhere, and the rule was applied to *tests*. It was never applied to the app's own
+diagnostics. `session.ts` reported every failure through `console.error`/`console.warn` — and so
+did `queue.ts`, `recovery.ts`, `llm/server.ts`, `capability-probe.ts`. `src/main/log.ts`, the
+one thing that writes to a file, was used almost nowhere in the capture path.
+**Fix:** every capture failure path now goes through `log.*` with structured context
+(`meetingId`, `encoder`, `trackLayout`, `stderrTail`), plus a `session finalized` success line —
+a known-good baseline is what makes the next failure readable. ffmpeg's stderr tail is now
+retained on the session (`lastStderrTail`) *before* the run object is torn down, because the
+finalize `catch` previously ran after `run` was already null and had nothing left to report.
+**A second bug found while verifying this:** `log.write()` spread the caller's `extra` object
+**after** the envelope fields, so a call passing `{ level: 'very-quiet' }` overwrote the log
+level and emitted a line claiming `"level":"very-quiet"`. Any filter over these logs would
+silently miss it. Fixed structurally — `extra` is now spread first, so the envelope always wins.
+**Verified:** a 12 s run now produces `ffmpeg spawned` → `audio track carries no usable signal`
+(with the measured dB values) → `session finalized` (with duration, bytes, segment count), all
+at their correct levels.
+**Rule:** in a GUI-subsystem process, `console.*` is equivalent to deleting the message. Enforce
+it mechanically rather than by discipline (`no-console` for `src/main/**`), and never let a
+structured-log envelope be overwritable by its own payload.
+
+---
+
+## M-023 — the silence gate measured the audio after normalising it, so nothing was ever silent
+
+**Date:** 2026-08-31  **Area:** pipeline/audio  **Cost:** the entire "summary and transcript is
+not working" report
+**Symptom:** a recording completed with all four tracks, every pipeline stage reported success
+or a bare `skipped`, and the user got an empty transcript and no summary with no error anywhere.
+The extract checkpoint claimed the microphone track was at `-19.8 dB` and "not silent".
+**Cause:** `extract-audio.ts` ran `-af loudnorm=I=-16:TP=-1.5:LRA=11,volumedetect`.
+volumedetect measured the **normalised** signal. loudnorm's whole job is to drag everything to
+−16 LUFS, so a near-silent track arrives at the meter looking healthy. Measured on the actual
+failing file:
+
+| filter order | mic mean | system mean |
+|---|---|---|
+| `loudnorm,volumedetect` (was) | **−19.8 dB** | −91.0 dB |
+| `volumedetect,loudnorm` (now) | **−53.5 dB** | −91.0 dB |
+
+A 33.7 dB lie about the microphone. The −70 dB threshold could only ever catch bit-exact
+digital silence, which is why the loopback track (a true all-zeros stream, mean == max == −91)
+was the only thing it ever flagged.
+**Fix:** volumedetect moved to the front of the chain, and `max_volume` is now parsed alongside
+`mean_volume`. A single classifier in `src/shared/audio-levels.ts` is shared by the capture
+session and the extract stage so the two can never disagree: mean within 0.5 dB of max and
+below −80 dB means digital silence (the M-020 signature — no spread means every sample is
+identical); mean below −45 dB means very quiet, still transcribed but recorded as the
+explanation if nothing comes back. Mean, not peak, is the discriminator — the real failing mic
+track peaked at −24.8 dB, so any peak-based gate would have called it fine.
+**Verified:** `tests/unit/audio-levels.test.ts` pins the real measured values from meeting
+`50d6d071`; the classifier calls the loopback track `digital-silence` and the mic track
+`very-quiet`, and a live 12 s recording now surfaces "The microphone was very quiet" to the user
+at stop instead of an empty transcript an hour later.
+**Rule:** measure before you correct. A meter placed after a normaliser reports the
+normaliser's opinion, not the signal's. And one classifier shared by every consumer — a
+threshold duplicated across two subsystems will drift until they disagree about the same file.
+
+---
+
+## M-024 — a stage reported `done` having produced nothing, and re-running it destroyed the old result
+
+**Date:** 2026-08-31  **Area:** pipeline/transcription  **Cost:** the user-visible half of
+"summary and transcript is not working"; latent data loss
+**Symptom:** two meetings finished with `extract: done`, `transcribe: done`, `diarize: skipped`,
+`summarize: skipped` — no failures anywhere — and **zero rows** in `transcript_segments`. The
+Library showed "No transcript yet — processing may still be running", which was false: processing
+had finished. Pressing anything the UI offered changed nothing.
+**Cause (three, stacked):**
+1. `whisper-cli` exits **0** when it recognises nothing. `transcribe.ts` maps its JSON and then
+   filters empty text, so `segments` is legitimately `[]`, and the stage returned `'done'`.
+2. `pipeline/index.ts` handed that empty array straight to
+   `transcripts.replaceTrackSegments()`, which **deletes the track's existing rows and then
+   inserts nothing**. So a re-run that recognised nothing did not merely fail to improve the
+   transcript — it deleted a previously good one. Latent data loss, not just a bad status.
+3. `summarize` then returned a bare `'skipped'` for "no transcript", and the queue had no way to
+   record a reason for a skip, so nothing downstream could explain the emptiness. In the UI
+   `skipped` shared a CSS bucket with `pending`, so a finished pipeline looked like a stuck one
+   indefinitely.
+**Fix:** `replaceTrackSegments` is now guarded by `segments.length > 0`. `StageOutcome` was
+widened to `'done' | 'skipped' | { state, code?, detail? }` — the bare form keeps existing stages
+compiling, the object form lets a stage explain itself — and every bare `return 'skipped'` in the
+pipeline now carries a code (`PIPELINE_NO_AUDIO`, `PIPELINE_AUDIO_SILENT`, `PIPELINE_NO_SPEECH`,
+`PIPELINE_NO_TRANSCRIPT`, `PIPELINE_NO_VIDEO`, `PIPELINE_MODEL_MISSING`,
+`PIPELINE_WORKDIR_MISSING`). Transcribe returns `PIPELINE_AUDIO_SILENT` when every track was
+digitally silent and `PIPELINE_NO_SPEECH` when audio was present but unintelligible — different
+causes send the user to different fixes. Codes reach the renderer, `skipped` got its own badge
+class, and each reason renders as a sentence rather than an enum name.
+Also fixed here: a missing whisper model used to `throw`, burning three retries with exponential
+backoff before landing on `failed`, while `diarize` and `vlm` skipped honestly for the identical
+condition. It now skips too.
+**Verified:** `npm run test:honesty` — a new deterministic harness that synthesises media and
+asserts on outcome CODES, with no microphone, speakers, or window focus involved (M-014):
+
+| case | media | required outcome |
+|---|---|---|
+| silence | video + two `anullsrc` tracks | `extract` **and** `transcribe` skip with `PIPELINE_AUDIO_SILENT` |
+| tone | video + two loud 440 Hz tracks | `extract` runs; `transcribe` skips with `PIPELINE_NO_SPEECH` |
+
+Both cases additionally assert that no stage reports `done` alongside zero segments. ALL PASS.
+**Rule:** exit code 0 is not a result. A stage that can legitimately produce nothing must
+distinguish "succeeded and produced nothing" from "succeeded and produced something", and say
+which. And a write path that DELETES before it INSERTS must never be handed an empty set — make
+the guard structural, not a convention, because the empty case is exactly the one nobody tests.
+
+---
+
+## M-025 — cleanup lived in a stage that could skip, so re-processing had nothing to work from
+
+**Date:** 2026-08-31  **Area:** pipeline/lifecycle  **Cost:** made every broken meeting
+permanently unfixable
+**Symptom:** re-processing a meeting that had produced no transcript did nothing at all — the
+stages ran and returned instantly, and the result was identical.
+**Cause (two independent bugs that only bit together):**
+1. `enqueue()` and `retry()` reset `state`, `attempts`, `error_code` and `progress` but **not
+   `checkpoint`**. Transcribe's checkpoint records which tracks it has already handled, so a
+   re-run read `{"done":["mic","system"]}`, found nothing left to do, and returned `done` in
+   milliseconds without transcribing anything. Re-running was a no-op *precisely* for the
+   meetings that needed it.
+2. Even with that fixed, the audio was gone: `diarize` deleted the whole work directory in an
+   unconditional `finally`, which ran on all four of its skip paths too. A meeting with no system
+   audio — which never needed diarization at all — still lost `mic.wav` and `system.wav`.
+**Fix:** `enqueue` and `retry` now clear `checkpoint`; `resetInterrupted()` deliberately does
+**not**, because that path is crash-resume and a stage that persisted half its work should not
+redo it. Three paths, three intents, commented as such. Cleanup moved out of `diarize` into a new
+terminal `publish` stage appended to `PROCESSING_STAGES`, which runs last on every path whatever
+happened upstream — the queue picks pending jobs in insertion order, so "appended last" is
+"terminal" by construction. Transcribe additionally returns `PIPELINE_WORKDIR_MISSING` rather
+than a cryptic failure when it finds the WAVs already gone.
+**Verified:** `npm run test:honesty` shows `publish:done` on every run including the all-skipped
+silence case; re-processing a meeting now re-runs extract and repopulates the checkpoint.
+**Rule:** teardown belongs in a stage that cannot be skipped, never in one that can. And any
+"reset for re-run" must invalidate every piece of memoised progress, or it resets the paperwork
+while preserving the wrong answer.
+
+---
+
+## M-026 — invisible backspace bytes killed the scene classifier, and lint had been saying so all along
+
+**Date:** 2026-08-31  **Area:** pipeline/visual  **Cost:** every keyframe misclassified since
+Phase 5; found only while clearing unrelated lint noise
+**Symptom:** `npm run lint` reported six `no-control-regex` errors in `vlm.ts`. They looked like
+a pedantic rule complaining about a deliberate escape, and had been living in the "15 known lint
+errors" pile for days.
+**Cause:** the source contained literal **BACKSPACE bytes (0x08)** where `\b` word boundaries
+were intended — invisible in every editor, and rendered as `\b` when read back with a text tool,
+so the file looked correct. `JSON.stringify` on the line is what finally showed it.
+On top of that the alternation was never grouped, so even with real `\b` the regex would still
+have been wrong: `\ba|b|c\b` binds the boundaries to the first and last alternative only.
+
+Actual behaviour of `/\x08slide|presentation|powerpoint|deck\x08/i`:
+
+| caption | matched? | correct? |
+|---|---|---|
+| `a slide about budget` | **no** | should be `slide` |
+| `the deck` | **no** | should be `slide` |
+| `powerpointless nonsense` | **yes** | false positive |
+| `this presentation` | yes | correct, but by accident |
+
+Every one of the six keyword groups had a dead first entry and a dead last entry, and its middle
+entries matched inside longer words. The `keyframes 6/6 · VLM 6/6` E2E still passed because it
+asserts on the *caption*, never on the scene type.
+**Fix:** grouped, boundaried regexes — `\b(?:slide|presentation|powerpoint|deck)\b`. The keyword
+table and `parseReply` moved into a new pure `stages/vlm-scene.ts`, because the logic lived in a
+module that imports `electron` and therefore could not be unit-tested at all — the same reason it
+stayed broken. `tests/unit/vlm-scene.test.ts` now asserts no control character survives in any
+pattern, that every pattern is grouped, and that the first and last keyword of a group both match
+while `powerpointless` does not.
+**Verified:** `npm run lint` clean (0 errors, from 15), 8 new unit tests, 137 total green.
+**Rule:** a lint error you have decided to live with is a finding you have decided not to read.
+`no-control-regex` exists because control characters are invisible — the one class of bug you
+cannot review your way out of. And logic that cannot be imported without Electron cannot be
+tested, which is not a testing gap but a design one: extract the pure part.
+
+---
+
+## M-027 — "off" and "not chosen" were the same value, so Refresh silently turned the camera back on
+
+**Date:** 2026-08-31  **Area:** renderer/capture setup  **Cost:** found while building the
+toggles the user asked for; would have shipped as a confusing recording
+**Symptom:** the only way to turn the camera off was to pick "None" in its dropdown. Doing so
+discarded which camera had been selected, and pressing "Refresh devices" afterwards turned the
+camera back on with the first non-virtual device.
+**Cause:** `Selection` stored `cameraDeviceId: string | null`, where `null` meant BOTH "off" and
+"nothing selected yet". `refreshDevices()` then filled the gap with
+`sel.cameraDeviceId ?? inv.cameras.find(...)`, which cannot distinguish a deliberate "off" from
+an empty initial state — so a hardware re-enumeration silently overrode a user decision.
+**A second, worse bug in the same two lines:** `buildConfig` mapped an unreconciled device
+(`dshowName === null`, which `reconcile.ts` returns rather than guessing) to `null` as well. The
+dropdown appended " — unavailable to recorder" to the label, but nothing blocked recording and no
+validation fired, so a user could record believing their microphone was on and get a file with no
+mic track and no explanation.
+**Fix:** `cameraEnabled` / `microphoneEnabled` booleans alongside the ids. "Off" keeps the device,
+so switching back on restores it; `refreshDevices()` no longer touches the toggles, and seeds
+`cameraEnabled` exactly once from `QUALITY_PROFILES[preset].cameraEnabledDefault` — a field that
+had existed since Phase 1 and was read nowhere. The silent downgrade is now surfaced by
+`enabledButUnavailable()` as a blocking-looking error in the preview panel, and `select()`
+re-validates on a 400 ms debounce so `session:validate`'s existing correct warnings are actually
+seen rather than waiting for a "Check setup" press nobody makes.
+`buildConfig` and the Selection type moved to a new pure `capture-config.ts`, because `store.ts`
+imports `api`, which touches `window` at module load — the mapping that decides whether a track
+gets recorded could not be imported by a test at all. Same root cause as M-026.
+**Verified:** `tests/unit/source-toggles.test.ts` — nine cases covering each toggle, the
+remembers-the-device property, mic+system together, every-audio-source-off, and the
+enabled-but-unavailable report. `tests/unit/ffmpeg-builder.test.ts` pins the argv side, including
+mic-off making system audio `a:0`. Live 12 s recording with all sources on still yields 2 video +
+2 audio tracks.
+**Rule:** a nullable id cannot carry an on/off decision as well. When one value has to mean two
+things, one of them will be inferred wrongly by something that only knows about the other. And a
+capability the user can switch on must fail loudly when it cannot be delivered — a config that
+silently drops a track the user believes is recording is the same silent-fallback bug as M-023,
+one layer up.
+
+---
+
+## M-028 — the model writes its own plumbing into the prose, and the invisible-escape bug came straight back
+
+**Date:** 2026-08-31  **Area:** pipeline/qa  **Cost:** caught on the first real run
+**Symptom:** the first Q&A report generated from a real meeting rendered
+`"...positions in the next quarter. t=19400"` as an answer, with a perfectly good `0:19` seek
+button sitting right next to it. A later pair ended `"...requiring clarification. t=null"`.
+**Cause:** the prompt tells the model to carry the nearest `[t=...]` value into the `t` FIELD.
+qwen3-4b does that — and also writes the marker into the sentence. The instruction is ambiguous
+about where the value belongs, and no amount of prompt wording makes that reliably unambiguous,
+so the cleanup has to be structural rather than persuasive.
+**Fix:** `cleanAnswer()` in the pure `qa-support.ts` strips a leading-or-bracketed `t=<digits>`
+or `t=null` and repairs the spacing, applied to both the question and the answer before storage.
+Pinned by tests using the exact strings the real run produced.
+**The part worth recording:** the first version of that regex was written as
+`/\[?\bt\s*=\s*\d+\]?/gi` through a shell heredoc, and the `\b` arrived in the file as a literal
+**0x08 backspace byte** — the identical failure documented in M-026 barely an hour after writing
+it, in the code fixing a different bug. The unit test caught it; `no-control-regex` would have
+too. The rewrite avoids the escape entirely, using `(?<![a-z])`, because a lookbehind cannot be
+mistyped into an invisible character.
+**Verified:** `npm run test:qa` on a real 20-segment meeting — 6 content assertions including
+"no t= marker leaked into an answer" and "no duplicate questions". `npm run test` includes 5
+`cleanAnswer` cases. Zero control characters in the file, asserted directly.
+**Rule:** a model told to put a value in a field will often put it in the prose as well; strip
+machine markers from generated text as a matter of course rather than trusting the instruction.
+And never author a regex through a shell heredoc — write the file directly, or use a construct
+that has no backslash escape to lose.
+
+---
+
+## M-029 — the idle unloader could kill a model mid-answer
+
+**Date:** 2026-08-31  **Area:** pipeline/llm  **Cost:** none observed yet; found while reading
+the lifecycle for the Q&A stage
+**Symptom:** none reproduced — this is a latent race found by inspection, recorded because the
+window is real and the failure would have looked like a model bug.
+**Cause:** `IDLE_UNLOAD_MS` is 5 minutes and `chat()`'s `AbortSignal.timeout` is 10 minutes, and
+`touchIdle()` was called when a request STARTED. A completion running longer than five minutes —
+precisely the big reduce pass on a 15 W laptop — would have its own llama-server killed out from
+under it and fail with a fetch error that named nothing.
+**Fix:** an `inFlight` counter; the idle timer re-arms instead of unloading while any request is
+outstanding, and `touchIdle()` now also runs when a request FINISHES so the clock starts from the
+end. The 5-minute idle window is kept — RAM matters more here than a warm model.
+Alongside it: llama-server's stderr, previously discarded entirely, is kept in a bounded 40-line
+ring and written to the log **only** on a startup failure or a non-zero exit, so
+`"did not become healthy in time"` finally carries a reason. Startup lines are load and config
+diagnostics, not prompts, so this does not breach the no-model-output-in-logs invariant.
+**Verified:** typecheck plus a real Q&A generation against a live server; the guard is
+inspection-level, and the stderr ring is exercised on every start.
+**Rule:** a timeout that can fire during the operation it is timing must know the operation is
+still running. Any idle-unload, cache-evict or reap timer needs an in-flight count, not just a
+last-touched timestamp.
+
+---
+
+## M-030 — a stray Electron makes every harness pass without running anything
+
+**Date:** 2026-08-31  **Area:** tooling/testing  **Cost:** a schema migration that silently did
+not apply, and three "successful" harness runs that never booted
+**Symptom:** after adding migration v3, three consecutive `MEETFROGE_SMOKE=1` runs exited **0**
+and the database was still at schema version 2. The migration SQL was present in the built
+bundle, the runner was correct, and `out/smoke.json` was five days old — but nothing in the
+output said so, because the exit code said success.
+**Cause:** `app.requestSingleInstanceLock()` in `src/main/index.ts`. A second launch does not
+boot: it hands off to the running instance and **quits with exit code 0**. Six stray
+`electron.exe` processes left behind by earlier harness runs were holding the lock, so every new
+launch was a no-op that reported success.
+This is not specific to the smoke test. Every harness in `scripts/` asserts on exit codes and
+output files, and any of them will pass vacuously while a stray instance exists — the same shape
+as M-004, where a log-grep assertion would have passed forever.
+**Fix:** `scripts/electron-run.mjs` — one entry point that kills stray `electron.exe` and
+`llama-server.exe` first, deletes the expected artefact, runs the app, and then requires that
+artefact to exist **with an mtime after the launch**. A stale or missing file fails with a message
+naming the single-instance lock as the likely cause, so the next person does not spend the same
+half hour. `pipeline-honesty-test.mjs` and `qa-test.mjs` go through it.
+**Verified:** killing the strays and re-running took the database from schema 2 to 3 with
+`meetfroge.db.pre-v3.bak` written; `npm run test:qa` still passes through the new runner.
+**Rule:** a single-instance application cannot report success by exiting 0 — the exit code
+belongs to whichever process actually held the lock. Assert on a **freshly written artefact**,
+never on the exit code alone, and clear strays before launching. The generalisation of M-004:
+if a test's success signal can be produced without the code under test running, it is not a test.
+
+---
+
+## M-031 — a "custom" marker orphaned every recording made under a folder the user later changed
+
+**Date:** 2026-08-31  **Area:** storage  **Cost:** caught by the bulk-delete run, before any real
+recording was affected
+**Symptom:** deleting all meetings reported `56 deleted, 1 failed`, and the failure was:
+```
+PathEscapeError: path escapes its root: custom recordings folder is not configured: synthetic_b86b534c.mkv
+```
+That meeting had been recorded into a chosen folder; the setting was afterwards reset to the
+default. It was then **unplayable and undeletable** — every path that touches it, including
+`meetings:delete`, refused to resolve it.
+**Cause:** `meetings.media_root` stored the *marker* `'custom'` and resolution looked the real
+folder up from **the current setting**. So the row was not self-sufficient: its meaning depended
+on a value the user is explicitly invited to change. Reset the folder, or point it somewhere new,
+and every recording made under the old one loses its root. The containment guard behaved
+perfectly — it refused to guess, which is the only reason this surfaced as an error rather than
+as a deletion in the wrong directory.
+**Fix:** `media_root` now stores `'userData'` or the **absolute folder that was in force when the
+recording was made**. The row resolves on its own, forever, whatever the setting becomes.
+Containment is unchanged: `media_path` is still relative, `resolveInside` still contains it, and
+the root comes from SQLite (written by main) rather than from the renderer, so trusting it is not
+an escalation.
+**Verified:** `npm run test:storage` — records into a chosen folder, asserts `media_root` is the
+real path and `media_path` is still relative, **then resets the setting to the default** and
+asserts the row still points at the real file and still deletes cleanly. That reversal is the
+case the marker got wrong, and it is now the centre of the test.
+**Rule:** a stored row must not depend on mutable global configuration to be interpreted. If a
+setting can change, anything already written under it has to record what was true at the time —
+"which folder was this saved to" is part of the record, not a lookup. Second lesson: the bulk
+operation found this, not the unit tests. Running a destructive path over *every* row exercises
+combinations no fixture contains.

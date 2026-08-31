@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { AppError } from '@shared/errors'
 import { MODEL_REGISTRY, type ModelId } from './model-registry'
+import { log } from '@main/log'
 
 export type { ModelId } from './model-registry'
 
@@ -51,7 +52,7 @@ export function resolveModel(id: ModelId): string {
 export function modelAvailable(id: ModelId): boolean {
   const c = checkModel(id)
   if (!c.ok && c.reason !== 'missing') {
-    console.warn(`[models] ${MODEL_REGISTRY[id].file}: ${c.reason}`)
+    log.warn('models', 'model unusable', { file: MODEL_REGISTRY[id].file, reason: c.reason })
   }
   return c.ok
 }

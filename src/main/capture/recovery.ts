@@ -1,8 +1,9 @@
-import { app } from 'electron'
 import { readdirSync, statSync, rmSync, existsSync } from 'node:fs'
 import path from 'node:path'
 import * as meetings from '@main/db/repositories/meetings'
 import { concatSegments, isPlayable, probeDurationS } from './media-tools'
+import { log } from '@main/log'
+import { relativizeMedia, resolveMedia } from '@main/platform/storage'
 
 /**
  * Crash recovery (plan §10.2). Runs once at startup, before any new session:
@@ -28,7 +29,7 @@ export async function recoverInterrupted(): Promise<RecoveryReport[]> {
   const reports: RecoveryReport[] = []
 
   for (const meeting of interrupted) {
-    const segmentDir = path.join(app.getPath('userData'), meeting.media_path)
+    const segmentDir = resolveMedia(meeting)
     const report: RecoveryReport = {
       meetingId: meeting.id,
       title: meeting.title,
@@ -47,7 +48,7 @@ export async function recoverInterrupted(): Promise<RecoveryReport[]> {
           const durationS = await probeDurationS(finalCandidate)
           meetings.finalizeMeeting(
             meeting.id,
-            path.relative(app.getPath('userData'), finalCandidate),
+            relativizeMedia(finalCandidate).relative,
             statSync(finalCandidate).size,
             Math.round((durationS ?? 0) * 1000),
           )
@@ -70,7 +71,7 @@ export async function recoverInterrupted(): Promise<RecoveryReport[]> {
       const playable: string[] = []
       for (const f of segFiles) {
         if (await isPlayable(f)) playable.push(f)
-        else console.warn(`[recovery] unplayable segment dropped: ${path.basename(f)}`)
+        else log.warn('recovery', 'unplayable segment dropped', { segment: path.basename(f) })
       }
       report.segmentsPlayable = playable.length
 
@@ -87,7 +88,7 @@ export async function recoverInterrupted(): Promise<RecoveryReport[]> {
 
       meetings.finalizeMeeting(
         meeting.id,
-        path.relative(app.getPath('userData'), finalPath),
+        relativizeMedia(finalPath).relative,
         statSync(finalPath).size,
         Math.round(durationS * 1000),
       )
@@ -96,7 +97,10 @@ export async function recoverInterrupted(): Promise<RecoveryReport[]> {
       report.outcome = 'recovered'
       report.durationS = durationS
     } catch (e) {
-      console.error(`[recovery] ${meeting.id}:`, e)
+      log.error('recovery', 'recovery failed for meeting', {
+        meetingId: meeting.id,
+        error: String(e).slice(0, 500),
+      })
       try {
         meetings.setMeetingState(meeting.id, 'failed')
       } catch {
@@ -107,9 +111,10 @@ export async function recoverInterrupted(): Promise<RecoveryReport[]> {
   }
 
   if (reports.length) {
-    console.log(
-      `[recovery] ${reports.filter((r) => r.outcome === 'recovered').length}/${reports.length} interrupted meetings recovered`,
-    )
+    log.info('recovery', 'interrupted meetings processed', {
+      recovered: reports.filter((r) => r.outcome === 'recovered').length,
+      total: reports.length,
+    })
   }
   return reports
 }
