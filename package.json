@@ -25,7 +25,8 @@
     "spike:4": "npm run bench --prefix spikes/04-llama-vulkan",
     "test:honesty": "node scripts/pipeline-honesty-test.mjs",
     "test:qa": "node scripts/qa-test.mjs",
-    "test:storage": "node scripts/storage-root-test.mjs"
+    "test:storage": "node scripts/storage-root-test.mjs",
+    "diagnose:audio": "node scripts/audio-diagnose.mjs"
   },
   "dependencies": {
     "sherpa-onnx-node": "^1.13.6",

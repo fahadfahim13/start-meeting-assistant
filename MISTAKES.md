@@ -820,3 +820,102 @@ setting can change, anything already written under it has to record what was tru
 "which folder was this saved to" is part of the record, not a lookup. Second lesson: the bulk
 operation found this, not the unit tests. Running a destructive path over *every* row exercises
 combinations no fixture contains.
+
+---
+
+## M-032 — the System meter read zero until Record was pressed, so a dead loopback was invisible
+
+**Date:** 2026-08-31  **Area:** capture/audio + UX  **Cost:** real meetings recorded without the
+other participant's voice
+**Symptom:** the user reported "the voice of the person I'm in the meeting with didn't come".
+Investigation found the capture path itself is fine — a tone played through the default output
+device is captured cleanly (system track mean −18.9 dB, the 600–900 Hz band at −24.1 dB, both
+audio tracks present in one recording). The failure was environmental and, crucially,
+**undetectable in advance**.
+**Cause:** `systemLevel` was only ever written by a `setInterval` created inside `store.start()`.
+Before recording, the System meter was hard-wired to zero. This machine has **three active render
+endpoints** (Headphones, Headset, Speaker); if Windows sends the meeting to one and the loopback
+attaches to another (M-019), or the render session opens after capture (M-020), the system track
+is silence — and there was no way to find that out until the meeting was over. The post-recording
+warning added in M-023 tells you afterwards; nothing told you before.
+**Fix:** the loopback now runs as a **pre-record preview**, so the System bar moves while the
+meeting plays and a flat bar is visible before anything is lost. Two deliberate details:
+- `start()` **reuses** the preview stream instead of opening a second one. That removes a
+  transition rather than adding one, and means the loopback is already flowing when ffmpeg opens
+  the pipe (M-020's ordering, for free).
+- The preview is NOT torn down by `previewsSuspended`. That guard exists for the camera and
+  microphone, which are exclusive devices (M-007); a loopback is not one, and here the stream is
+  deliberately handed to the recording.
+The panel says what a flat bar means, in words: sound is going to a different output device than
+the one being captured.
+**Verified:** `scripts/audio-diagnose.mjs` — plays a known two-tone signal through the default
+output, records through the real app, and reports each track's level plus a band-pass check that
+the tone specifically arrived. It answers "is system audio working" with a measurement instead of
+a guess.
+**Rule:** a capture path that can fail for environmental reasons needs a live pre-flight readout,
+not only a post-hoc warning. If the only way to discover a setup problem is to lose a recording,
+the feature is not finished — and "it works in my test" is not an answer to "it did not work in
+my meeting".
+
+---
+
+## M-033 — constant bitrate on a static screen: 3.40 GB/h for content worth 0.26
+
+**Date:** 2026-08-31  **Area:** capture/encoding  **Cost:** ~13x the storage every recording
+**Symptom:** the user asked whether the video files could be smaller. A 15-second `high`-preset
+recording was 15.4 MB — **3.40 GB per hour**.
+**Cause:** every preset specified a fixed bitrate (`-b:v 6000k` at `high`). A meeting screen is
+nearly static, so constant bitrate spends megabits per second re-encoding frames that did not
+change; the encoder is not allowed to spend less when there is nothing happening.
+**Fix:** quality-based rate control on every encoder — `-rc cqp -qp_i N -qp_p N` for h264_amf,
+`-rc constqp` for NVENC, `-global_quality` for QSV, `-crf` for libx264. Presets now carry a
+quantizer instead of a bitrate.
+
+Measured on REF-01, the same 8 s of real screen capture, video only:
+
+| setting | GB/hour |
+|---|---|
+| CBR 6000k @30fps (was `high`) | 2.45 |
+| CBR 3000k @15fps (was `balanced`) | 1.31 |
+| **QP 26 @30fps** | **0.53** |
+| QP 30 @15fps | 0.25 |
+| QP 34 @10fps | 0.13 |
+
+End to end through the app, `high` preset, 1080p30 screen + camera + two audio tracks:
+**3.40 GB/h -> 0.26 GB/h.** Same resolution, same framerate, same quality target.
+**Verified:** a real 15 s recording measured at 1127 KB with all four tracks intact, against
+15.4 MB before.
+**Rule:** for screen content, fixed bitrate is close to the worst possible choice — it pays the
+maximum price for the cheapest frames. Quality-based encoding lets a static screen cost what a
+static screen is worth. And a size estimate derived from a nominal bitrate is fiction once the
+encoder stops targeting one: measure, and say in the UI that it is an estimate.
+
+---
+
+## M-034 — a live ffmpeg filter can be commanded over the stdin already used for 'q'
+
+**Date:** 2026-08-31  **Area:** capture/ffmpeg  **Cost:** none — this is the finding that made
+mid-recording mute cheap instead of a capture-graph rewrite
+**Context:** the user asked to mute the microphone and system audio **during** a recording. The
+obvious approaches are both bad: removing an input means segments carry different streams and the
+lossless concat can no longer join them (M-011), and routing the microphone through the renderer
+to gain a mute point is a capture-graph redesign.
+**Finding:** ffmpeg's interactive mode accepts a filter command on stdin — the same pipe already
+used to send `q` for a graceful stop. Give each audio track a NAMED volume filter
+(`[0:a]volume@mic=1[amic]`) and one line mutes it live.
+
+The exact form matters and is not obvious:
+
+```
+cvolume@mic -1 volume 0     <- works
+c volume@mic -1 volume 0    <- "at least 3 arguments were expected, only 0 given"
+cvolume@mic volume 0        <- "only 1 given"  (the time field is not optional)
+```
+
+`c` must NOT be followed by a space, and the `-1` time field is required.
+**Verified:** a steady tone went from −21.1 dB to −91.0 dB mid-run with no respawn; then in the
+real app, a recording's system track measured −20.1 dB before the mute and −91.0 dB after, while
+the untouched microphone track was unaffected and the file still concatenated with all tracks.
+**Rule:** before redesigning around a limitation, check whether the tool already exposes a
+control channel. And when a CLI documents a command format, test the exact spacing — ffmpeg's own
+error message was the thing that revealed the required time field.

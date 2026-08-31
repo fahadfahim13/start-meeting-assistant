@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import type { CaptureConfig, SessionStatus, ValidationResult } from '@shared/schemas/capture'
 import { QUALITY_PROFILES } from '@shared/schemas/capture'
+import type { QualityPreset } from '@shared/schemas/capture'
 import { AppError } from '@shared/errors'
 import { probeCapabilities } from '@main/platform/capability-probe'
 import { resolveBinary } from '@main/platform/binaries'
@@ -19,7 +20,7 @@ import {
   rootAvailable,
 } from '@main/platform/storage'
 import { log } from '@main/log'
-import { buildCaptureArgs } from './ffmpeg-builder'
+import { buildCaptureArgs, MIC_FILTER, SYSTEM_FILTER } from './ffmpeg-builder'
 import { LoopbackBridge } from './loopback-bridge'
 import { concatSegments, diskFreeBytes, measureTrackLevels, probeDurationS } from './media-tools'
 
@@ -42,6 +43,29 @@ const STOP_GRACE_MS = 10_000
 // run for 5 minutes to produce multiple segments. Clamped, defaults to 300.
 const SEGMENT_TIME_S = Math.min(3600, Math.max(5, parseInt(process.env['MEETFROGE_SEGTIME'] ?? '300', 10) || 300))
 const DISK_GUARD_INTERVAL_MS = 10_000
+/** ffmpeg reads one command per line from stdin. */
+const NEWLINE = String.fromCharCode(10)
+
+/**
+ * Rough screen bitrate per preset, from measurement rather than a nominal
+ * number — quality-based encoding has no target bitrate to quote.
+ *
+ * Measured on REF-01: a full `high` recording (1080p30 screen + camera + two
+ * audio tracks) came out at 0.26 GB/h, against 3.40 GB/h for the old fixed
+ * 6000k bitrate. These figures deliberately sit ABOVE what was observed, since
+ * the number feeds a disk-space pre-flight and over-estimating is the safe
+ * direction.
+ *
+ * It is only ever an estimate: with quality-based encoding the size follows how
+ * much the screen actually moves, which is the entire reason it is smaller. A
+ * static slide deck costs a fraction of a shared video call.
+ */
+const QP_MEASURED_KBPS: Record<QualityPreset, number> = {
+  efficient: 120,
+  balanced: 250,
+  high: 450,
+  archival: 2000,
+}
 /** 3 x 10 s: long enough to ride out a transient statfs, short enough to salvage. */
 const DISK_PROBE_FAILURES_BEFORE_STOP = 3
 
@@ -79,6 +103,8 @@ interface ActiveSession {
    * dead recordings produced a log file containing one line (M-022).
    */
   lastStderrTail: string[]
+  /** Which tracks are currently muted; survives the pause/resume respawn. */
+  muted: { mic: boolean; system: boolean }
   totalPcmDrops: number
   totalPcmBackpressure: number
   statusTimer: ReturnType<typeof setInterval>
@@ -127,9 +153,14 @@ export class SessionManager {
     }
 
     const profile = QUALITY_PROFILES[config.preset]
-    const videoK = profile.screenBitrateK + (config.camera ? profile.cameraBitrateK : 0)
+    // With quality-based rate control there is no bitrate to add up, so the
+    // estimate comes from measurement instead: REF-01, real screen capture,
+    // video only. It is an estimate and the UI says so — actual size depends on
+    // how much the screen moves, which is the whole point of using QP.
+    const screenK = config.screen ? QP_MEASURED_KBPS[config.preset] : 0
+    const cameraK = config.camera ? Math.round(screenK * 0.35) : 0
     const audioK = profile.audioBitrateK * ((config.microphone ? 1 : 0) + (config.systemAudio ? 1 : 0))
-    const estimatedBytesPerHour = Math.round(((videoK + audioK) * 1000 * 3600) / 8)
+    const estimatedBytesPerHour = Math.round(((screenK + cameraK + audioK) * 1000 * 3600) / 8)
 
     let free = 0
     try {
@@ -246,6 +277,7 @@ export class SessionManager {
       runStartedAt: null,
       encoder,
       lastStderrTail: [],
+      muted: { mic: false, system: false },
       totalPcmDrops: 0,
       totalPcmBackpressure: 0,
       statusTimer: setInterval(() => this.events.onStatus(this.status()), 1000),
@@ -287,6 +319,8 @@ export class SessionManager {
         segmentTimeS: SEGMENT_TIME_S,
       },
       pcmPipePath: bridge?.pipePath ?? null,
+      // Carried back in so resuming does not silently un-mute a track.
+      muted: session.muted,
     })
     session.encoder = built.encoder
 
@@ -504,6 +538,46 @@ export class SessionManager {
    *
    * Never throws. A measurement failure must not downgrade a good recording.
    */
+  /**
+   * Mute or unmute a track WHILE recording.
+   *
+   * ffmpeg's interactive mode accepts a filter command on stdin — the same
+   * channel that carries 'q' for a graceful stop. Verified on REF-01:
+   * `cvolume@mic -1 volume 0` takes a live track from -21 dB to -91 dB with no
+   * respawn. The `c` must not be followed by a space; with one, ffmpeg replies
+   * "at least 3 arguments were expected, only 0 given".
+   *
+   * The track is never removed, only silenced: every segment has to carry the
+   * same streams or the lossless concat cannot join them (M-011).
+   */
+  setMuted(track: 'mic' | 'system', muted: boolean): SessionStatus {
+    const session = this.active
+    if (!session) throw new AppError('CAPTURE_NOT_ACTIVE')
+    const present = track === 'mic' ? session.config.microphone !== null : session.config.systemAudio
+    if (!present) {
+      throw new AppError('DEVICE_NOT_FOUND', `this recording has no ${track} track to mute`)
+    }
+
+    session.muted[track] = muted
+    const filter = track === 'mic' ? MIC_FILTER : SYSTEM_FILTER
+    const run = session.run
+    if (run && !run.ffmpeg.killed) {
+      try {
+        run.ffmpeg.stdin.write(`cvolume@${filter} -1 volume ${muted ? 0 : 1}` + NEWLINE)
+      } catch (e) {
+        // Recording continues regardless — a failed mute must not end a session.
+        log.warn('capture', 'mute command could not be delivered', {
+          meetingId: session.meetingId,
+          track,
+          error: String(e).slice(0, 200),
+        })
+      }
+    }
+    log.info('capture', 'track mute changed', { meetingId: session.meetingId, track, muted })
+    this.events.onStatus(this.status())
+    return this.status()
+  }
+
   private async checkAudioLevels(session: ActiveSession): Promise<void> {
     const tracks: ('mic' | 'system')[] = []
     if (session.config.microphone) tracks.push('mic')
@@ -606,6 +680,8 @@ export class SessionManager {
       pcmDrops: (s?.totalPcmDrops ?? 0) + (runStats?.drops ?? 0),
       pcmBackpressure: (s?.totalPcmBackpressure ?? 0) + (runStats?.backpressure ?? 0),
       encoderInUse: s?.encoder ?? null,
+      mutedMic: s?.muted.mic ?? false,
+      mutedSystem: s?.muted.system ?? false,
       error: this.lastError,
       warnings: [...this.lastWarnings],
     }

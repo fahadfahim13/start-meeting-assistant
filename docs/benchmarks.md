@@ -342,3 +342,40 @@ When adding an entry:
 4. State what it means for the design — a number without a conclusion is not useful.
 5. If it contradicts an expectation, say so explicitly and open a `MISTAKES.md` entry if the
    expectation came from an assumption rather than a measurement.
+
+---
+
+### B-011 — encoder rate control: fixed bitrate vs quality-based
+
+**Date:** 2026-08-31 · **Method:** the same 8 s of real desktop via `ddagrab` -> `h264_amf`,
+video only, only the rate-control arguments changed.
+
+| setting | size (8 s) | GB/hour |
+|---|---|---|
+| CBR 6000k @30fps (old `high`) | 5715 KB | 2.45 |
+| CBR 3000k @15fps (old `balanced`) | 3048 KB | 1.31 |
+| **CQP 26 @30fps (new `high`)** | **1228 KB** | **0.53** |
+| CQP 30 @15fps (new `balanced`) | 588 KB | 0.25 |
+| CQP 34 @10fps (new `efficient`) | 313 KB | 0.13 |
+
+End to end through the app — `high` preset, 1080p30 screen + camera + mic + system audio:
+
+| | size | GB/hour |
+|---|---|---|
+| before (CBR 6000k) | 15.4 MB / 15.2 s | **3.40** |
+| after (CQP 26) | 1127 KB / 15.1 s | **0.26** |
+
+**13x smaller at the same resolution, framerate and track count.** A meeting screen barely
+changes, so a fixed bitrate pays full price for frames that are nearly identical. See M-033.
+
+Size now varies with content, which is the point — a static slide costs far less than a shared
+video. The pre-flight figure in the UI is therefore an estimate, and says so.
+
+### B-012 — mid-recording mute latency
+
+**Date:** 2026-08-31 · **Method:** `cvolume@sys -1 volume 0` written to the running ffmpeg's
+stdin halfway through a 15 s recording.
+
+System track: **−20.1 dB before, −91.0 dB after** (digital silence). The microphone track was
+unaffected, both tracks remained in the file, and the segments still concatenated. No respawn,
+no gap. See M-034 for the exact command syntax, which is unforgiving about spacing.

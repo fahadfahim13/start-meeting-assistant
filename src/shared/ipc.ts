@@ -60,6 +60,13 @@ export const INVOKE_CHANNELS = {
     request: z.object({}),
     response: SessionStatusSchema,
   },
+  // Mute a track DURING a recording. The track stays in the file and receives
+  // silence — removing it would change the stream layout between segments and
+  // break the lossless concat (M-011).
+  'session:setMute': {
+    request: z.object({ track: z.enum(['mic', 'system']), muted: z.boolean() }),
+    response: SessionStatusSchema,
+  },
   'session:status': {
     request: z.object({}),
     response: SessionStatusSchema,

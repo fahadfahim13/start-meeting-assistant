@@ -67,6 +67,15 @@ export default function App(): React.JSX.Element {
       timers.push(setTimeout(() => void useStore.getState().pause(), 1500 + seconds * 400))
       timers.push(setTimeout(() => void useStore.getState().resume(), 1500 + seconds * 600))
     }
+    // ?automute=system  — mute that track halfway through, so a harness can
+    // measure the track's first half against its second and prove the runtime
+    // mute actually reached ffmpeg.
+    const automute = new URLSearchParams(window.location.search).get('automute')
+    if (automute === 'system' || automute === 'mic') {
+      timers.push(
+        setTimeout(() => void useStore.getState().setMuted(automute, true), 1500 + seconds * 500),
+      )
+    }
     timers.push(setTimeout(() => void useStore.getState().stop(), 1500 + seconds * 1000))
     return () => timers.forEach(clearTimeout)
   }, [s.inventory === null])
@@ -152,6 +161,15 @@ export default function App(): React.JSX.Element {
       stream?.getTracks().forEach((t) => t.stop())
     }
   }, [s.selection.cameraDeviceId, s.selection.cameraEnabled, recording, s.previewsSuspended])
+
+  // System-audio meter BEFORE recording. Without it the System bar reads zero
+  // until Record is pressed, so a loopback attached to the wrong output device
+  // was invisible until the meeting was already over.
+  useEffect(() => {
+    const want = tab === 'record' && s.selection.systemAudio && !inSession
+    if (want) void s.startSystemPreview()
+    else s.stopSystemPreview()
+  }, [tab, s.selection.systemAudio, inSession])
 
   // Mic level meter — released during recording for the same reason. WASAPI
   // shared mode often tolerates two mic readers, but "often" is not a design.
@@ -376,7 +394,16 @@ export default function App(): React.JSX.Element {
             </p>
           )}
           {s.selection.systemAudio ? (
-            <Meter level={s.systemLevel} label={t.preview.system} />
+            <>
+              <Meter level={s.systemLevel} label={t.preview.system} />
+              {!inSession && (
+                <p className={s.systemPreviewOn && s.systemLevel < 0.001 ? 'preview-note warn-note' : 'preview-note'}>
+                  {s.systemPreviewOn && s.systemLevel < 0.001
+                    ? t.preview.systemSilent
+                    : t.preview.systemCheckHint}
+                </p>
+              )}
+            </>
           ) : (
             <p className="preview-note source-off" aria-label={t.preview.systemOff}>
               {t.preview.systemOff}
@@ -459,6 +486,28 @@ export default function App(): React.JSX.Element {
           <button className="ghost" disabled={recording || s.busy} onClick={() => void s.validate()}>
             {t.controls.checkSetup}
           </button>
+          {inSession && s.session && (
+            <>
+              {s.session.mutedMic !== undefined && s.selection.microphoneEnabled && (
+                <button
+                  className="ghost"
+                  onClick={() => void s.setMuted('mic', !s.session!.mutedMic)}
+                  aria-pressed={s.session.mutedMic}
+                >
+                  {s.session.mutedMic ? t.controls.unmuteMic : t.controls.muteMic}
+                </button>
+              )}
+              {s.selection.systemAudio && (
+                <button
+                  className="ghost"
+                  onClick={() => void s.setMuted('system', !s.session!.mutedSystem)}
+                  aria-pressed={s.session.mutedSystem}
+                >
+                  {s.session.mutedSystem ? t.controls.unmuteSystem : t.controls.muteSystem}
+                </button>
+              )}
+            </>
+          )}
           {!inSession ? (
             <button className="record" disabled={s.busy || !inv} onClick={() => void s.start()}>
               {t.controls.record}

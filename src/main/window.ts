@@ -181,6 +181,9 @@ export function createMainWindow(): BrowserWindow {
   const query: Record<string, string> = {}
   if (autorec) query['autorec'] = autorec
   if (autopause) query['autopause'] = autopause
+  // Harness hook: mute a track halfway through the recording (see App.tsx).
+  const automute = process.env['MEETFROGE_AUTOMUTE']
+  if (automute === 'mic' || automute === 'system') query['automute'] = automute
   if (DEV_SERVER_URL) {
     const qs = new URLSearchParams(query).toString()
     void win.loadURL(qs ? `${DEV_SERVER_URL}?${qs}` : DEV_SERVER_URL)

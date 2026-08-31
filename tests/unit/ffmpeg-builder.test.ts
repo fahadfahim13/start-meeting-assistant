@@ -56,9 +56,16 @@ describe('buildCaptureArgs', () => {
       output: { kind: 'single' as const, path: 'C:/out/x.mkv' },
       pcmPipePath: '\\\\.\\pipe\\test',
     })
+    // Each track now passes through its own named volume filter so it can be
+    // muted mid-recording; the invariant is unchanged — two separate tracks,
+    // mic first, never combined.
     const maps = args.filter((_, i) => args[i - 1] === '-map')
-    expect(maps).toContain('0:a') // mic
-    expect(maps).toContain('1:a') // system
+    expect(maps).toContain('[amic]')
+    expect(maps).toContain('[asys]')
+    expect(maps.indexOf('[amic]')).toBeLessThan(maps.indexOf('[asys]'))
+    const filter = args[args.indexOf('-filter_complex') + 1]!
+    expect(filter).toContain('[0:a]volume@mic=1[amic]')
+    expect(filter).toContain('[1:a]volume@sys=1[asys]')
     expect(args.join(' ')).not.toContain('amerge')
     expect(args.join(' ')).not.toContain('amix')
     expect(args).toContain('title=Microphone')
@@ -171,10 +178,45 @@ describe('buildCaptureArgs', () => {
     })
     expect(trackLayout.mic).toBe(false)
     expect(trackLayout.system).toBe(true)
-    expect(args.filter((_, i) => args[i - 1] === '-map')).toContain('0:a')
+    expect(args.filter((_, i) => args[i - 1] === '-map')).toContain('[asys]')
+    // The system pipe is input 0 when the mic is off — the ORDER invariant is
+    // preserved, the absolute index is not fixed and never was.
+    const filter = args[args.indexOf('-filter_complex') + 1]!
+    expect(filter).toContain('[0:a]volume@sys=')
     expect(args).toContain('title=System Audio')
     expect(args).not.toContain('title=Microphone')
     expect(args.join(' ')).not.toContain('-f dshow -thread_queue_size 4096')
+  })
+
+  it('starts a track muted when asked, so pause/resume preserves mute state', () => {
+    // Pause/resume respawns ffmpeg. Without carrying the state back in, resuming
+    // would silently un-mute a track the user had muted.
+    const { args } = buildCaptureArgs({
+      config: fullConfig,
+      capabilities: caps(['h264_amf']),
+      output: { kind: 'single' as const, path: 'C:/out/x.mkv' },
+      pcmPipePath: '\\\\.\\pipe\\test',
+      muted: { mic: true, system: false },
+    })
+    const filter = args[args.indexOf('-filter_complex') + 1]!
+    expect(filter).toContain('volume@mic=0')
+    expect(filter).toContain('volume@sys=1')
+    // Muting must not remove the track — the concat needs identical streams.
+    expect(args.filter((_, i) => args[i - 1] === '-map')).toContain('[amic]')
+  })
+
+  it('uses quality-based rate control, not a fixed bitrate', () => {
+    // A near-static meeting screen at CBR 6000k measured 2.45 GB/h; the same
+    // capture at QP 26 measured 0.53 GB/h at the same framerate.
+    const { args } = buildCaptureArgs({
+      config: fullConfig,
+      capabilities: caps(['h264_amf']),
+      output: { kind: 'single' as const, path: 'C:/out/x.mkv' },
+      pcmPipePath: '\\\\.\\pipe\\test',
+    })
+    expect(args).toContain('-rc')
+    expect(args).toContain('cqp')
+    expect(args.join(' ')).not.toContain('-b:v')
   })
 
   it('drops the audio encoder entirely when both audio sources are off', () => {

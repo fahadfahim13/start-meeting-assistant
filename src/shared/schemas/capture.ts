@@ -7,10 +7,22 @@ export type QualityPreset = z.infer<typeof QualityPresetSchema>
 export interface QualityProfile {
   screenMaxHeight: number
   screenFps: number
-  screenBitrateK: number
+  /**
+   * Quantizer, not bitrate. Lower is better quality and a bigger file; the
+   * scale is h264's QP (roughly 18 = visually lossless, 40 = poor).
+   *
+   * Measured on REF-01, 8 s of real screen capture, video only:
+   *   CBR 6000k @30fps -> 2.45 GB/h      QP 26 @30fps -> 0.53 GB/h
+   *   CBR 3000k @15fps -> 1.31 GB/h      QP 30 @15fps -> 0.25 GB/h
+   *                                      QP 34 @10fps -> 0.13 GB/h
+   * A meeting screen is nearly static, so a fixed bitrate spends megabits per
+   * second on frames that did not change. Quality-based rate control spends
+   * what the content needs — 4.6x smaller at the SAME framerate and quality.
+   */
+  screenQp: number
   cameraEnabledDefault: boolean
   cameraFps: number
-  cameraBitrateK: number
+  cameraQp: number
   audioBitrateK: number
 }
 
@@ -18,37 +30,37 @@ export const QUALITY_PROFILES: Record<QualityPreset, QualityProfile> = {
   efficient: {
     screenMaxHeight: 720,
     screenFps: 10,
-    screenBitrateK: 1500,
+    screenQp: 34,
     cameraEnabledDefault: false,
     cameraFps: 10,
-    cameraBitrateK: 500,
+    cameraQp: 32,
     audioBitrateK: 48,
   },
   balanced: {
     screenMaxHeight: 1080,
     screenFps: 15,
-    screenBitrateK: 3000,
+    screenQp: 30,
     cameraEnabledDefault: true,
     cameraFps: 15,
-    cameraBitrateK: 800,
+    cameraQp: 28,
     audioBitrateK: 64,
   },
   high: {
     screenMaxHeight: 1080,
     screenFps: 30,
-    screenBitrateK: 6000,
+    screenQp: 26,
     cameraEnabledDefault: true,
     cameraFps: 30,
-    cameraBitrateK: 1500,
+    cameraQp: 25,
     audioBitrateK: 96,
   },
   archival: {
     screenMaxHeight: 4320,
     screenFps: 30,
-    screenBitrateK: 12000,
+    screenQp: 20,
     cameraEnabledDefault: true,
     cameraFps: 30,
-    cameraBitrateK: 4000,
+    cameraQp: 20,
     audioBitrateK: 128,
   },
 }
@@ -97,6 +109,9 @@ export const SessionStatusSchema = z.object({
   pcmDrops: z.number().int().min(0),
   pcmBackpressure: z.number().int().min(0),
   encoderInUse: z.string().max(32).nullable(),
+  /** Live mute state. Muting silences a track; it never removes it (M-011). */
+  mutedMic: z.boolean(),
+  mutedSystem: z.boolean(),
   error: z.string().max(2000).nullable(),
   /**
    * Non-fatal findings about the recording that just finished — chiefly a track

@@ -20,6 +20,12 @@ import { AppError } from '@shared/errors'
  * and stdin is reserved for control. Same bytes, same format, different fd.
  */
 
+/** Filter instance names addressed by the runtime mute command. */
+export const MIC_FILTER = 'mic'
+export const SYSTEM_FILTER = 'sys'
+const MIC_OUT = 'amic'
+const SYSTEM_OUT = 'asys'
+
 export interface BuildInput {
   config: CaptureConfig
   capabilities: Capabilities
@@ -34,6 +40,16 @@ export interface BuildInput {
     | { kind: 'segments'; pattern: string; startNumber: number; segmentTimeS: number }
   /** Named pipe path carrying s16le 48k stereo PCM; null when systemAudio is off. */
   pcmPipePath: string | null
+  /**
+   * Which audio tracks start muted.
+   *
+   * Muting keeps the TRACK and feeds silence — it never removes an input.
+   * Segments are concatenated with `-map 0`, so every segment must carry the
+   * same streams (M-011); adding or dropping a track mid-recording would make
+   * the pieces unjoinable. Pause/resume respawns ffmpeg, so the current state
+   * is passed back in here to survive the respawn.
+   */
+  muted?: { mic?: boolean; system?: boolean }
 }
 
 export interface BuiltCommand {
@@ -115,18 +131,30 @@ function screenFilter(encoder: EncoderId, displayIndex: number, fps: number): st
   }
 }
 
-function encoderArgs(encoder: EncoderId, bitrateK: number): string[] {
+/**
+ * Quality-based rate control, not a fixed bitrate.
+ *
+ * A meeting screen is nearly static, so constant bitrate spends megabits per
+ * second re-encoding frames that did not change. Measured on REF-01 over the
+ * same 8 s of real screen capture: CBR 6000k at 30fps produced 2.45 GB/h, and
+ * QP 26 at the SAME 30fps produced 0.53 GB/h — 4.6x smaller with no drop in
+ * framerate. Each encoder spells the same idea differently.
+ */
+function encoderArgs(encoder: EncoderId, qp: number): string[] {
   switch (encoder) {
     case 'h264_amf':
-      return ['-c:v', 'h264_amf', '-b:v', `${bitrateK}k`]
+      // AMF: explicit constant-QP mode; qp_i/qp_p must both be set or it falls
+      // back to its default VBR and the saving disappears.
+      return ['-c:v', 'h264_amf', '-rc', 'cqp', '-qp_i', String(qp), '-qp_p', String(qp)]
     case 'h264_nvenc':
-      return ['-c:v', 'h264_nvenc', '-preset', 'p4', '-b:v', `${bitrateK}k`]
+      return ['-c:v', 'h264_nvenc', '-preset', 'p4', '-rc', 'constqp', '-qp', String(qp)]
     case 'h264_qsv':
-      return ['-c:v', 'h264_qsv', '-b:v', `${bitrateK}k`]
+      // QSV's ICQ takes a quality number on the same scale as QP here.
+      return ['-c:v', 'h264_qsv', '-global_quality', String(qp)]
     case 'libx264':
-      return ['-c:v', 'libx264', '-preset', 'veryfast', '-b:v', `${bitrateK}k`]
+      return ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', String(qp)]
     case 'libx264_ultrafast':
-      return ['-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', `${bitrateK}k`]
+      return ['-c:v', 'libx264', '-preset', 'ultrafast', '-crf', String(qp)]
   }
 }
 
@@ -235,6 +263,21 @@ export function buildCaptureArgs(input: BuildInput): BuiltCommand {
     )
   }
 
+  // Each audio track passes through a NAMED volume filter so it can be muted
+  // while recording, without respawning ffmpeg or changing the track layout.
+  // ffmpeg accepts `c<target> <time> <command> <arg>` on stdin — verified:
+  // `cvolume@mic -1 volume 0` takes a live track from -21 dB to -91 dB.
+  // The `c` must NOT be followed by a space; with one, ffmpeg's parser reports
+  // "at least 3 arguments were expected, only 0 given".
+  if (micInput >= 0) {
+    filters.push(`[${micInput}:a]volume@${MIC_FILTER}=${input.muted?.mic ? 0 : 1}[${MIC_OUT}]`)
+  }
+  if (systemInput >= 0) {
+    filters.push(
+      `[${systemInput}:a]volume@${SYSTEM_FILTER}=${input.muted?.system ? 0 : 1}[${SYSTEM_OUT}]`,
+    )
+  }
+
   if (filters.length) args.push('-filter_complex', filters.join(';'))
 
   // ---- mapping + encoding -------------------------------------------------
@@ -252,11 +295,11 @@ export function buildCaptureArgs(input: BuildInput): BuiltCommand {
   if (cameraInput >= 0) args.push('-map', '[vcam]')
 
   if (screenLabel || cameraInput >= 0) {
-    args.push(...encoderArgs(encoder, profile.screenBitrateK))
+    args.push(...encoderArgs(encoder, profile.screenQp))
   }
 
-  if (micInput >= 0) args.push('-map', `${micInput}:a`)
-  if (systemInput >= 0) args.push('-map', `${systemInput}:a`)
+  if (micInput >= 0) args.push('-map', `[${MIC_OUT}]`)
+  if (systemInput >= 0) args.push('-map', `[${SYSTEM_OUT}]`)
   if (micInput >= 0 || systemInput >= 0) {
     args.push('-c:a', 'libopus', '-b:a', `${profile.audioBitrateK}k`)
   }

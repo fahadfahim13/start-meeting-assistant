@@ -28,7 +28,13 @@ interface AppState {
    *  release their devices before ffmpeg tries to open them (M-007). */
   previewsSuspended: boolean
 
+  /** True while the pre-record system-audio meter is running. */
+  systemPreviewOn: boolean
+
   refreshDevices(): Promise<void>
+  startSystemPreview(): Promise<void>
+  stopSystemPreview(): void
+  setMuted(track: 'mic' | 'system', muted: boolean): Promise<void>
   select(patch: Partial<Selection>): void
   validate(): Promise<void>
   start(): Promise<void>
@@ -66,6 +72,7 @@ export const useStore = create<AppState>((set, get) => {
     validation: null,
     session: null,
     systemLevel: 0,
+    systemPreviewOn: false,
     busy: false,
     previewsSuspended: false,
 
@@ -130,6 +137,50 @@ export const useStore = create<AppState>((set, get) => {
       }, 400)
     },
 
+    /**
+     * Run the system-audio meter BEFORE recording.
+     *
+     * Without this the System meter reads zero until Record is pressed, so
+     * there was no way to find out that loopback was capturing nothing until
+     * after the meeting — which is exactly how "the other person's voice is
+     * missing" happened silently. This machine has three active output
+     * endpoints; whether the loopback attached to the one the meeting is
+     * playing on is a question only a live meter can answer.
+     *
+     * The handle is deliberately NOT released by `previewsSuspended`: unlike
+     * the camera and the microphone (M-007), a loopback is not an exclusive
+     * device, and `start()` REUSES this stream rather than opening a second
+     * one. That removes a transition rather than adding one — and it means the
+     * render session is already flowing when ffmpeg opens the pipe (M-020).
+     */
+    async startSystemPreview() {
+      if (loopback || get().session?.state === 'recording') return
+      try {
+        loopback = await startLoopback()
+        if (levelTimer) clearInterval(levelTimer)
+        levelTimer = setInterval(() => set({ systemLevel: loopback?.getLevel() ?? 0 }), 100)
+        set({ systemPreviewOn: true })
+      } catch (e) {
+        // Not fatal: recording can still start, it just cannot be pre-checked.
+        set({ devicesError: String(e), systemPreviewOn: false })
+      }
+    },
+
+    stopSystemPreview() {
+      // Never tear down a loopback that a recording is now using.
+      if (get().session?.state === 'recording') return
+      loopback?.stop()
+      loopback = null
+      if (levelTimer) clearInterval(levelTimer)
+      levelTimer = null
+      set({ systemLevel: 0, systemPreviewOn: false })
+    },
+
+    async setMuted(track, muted) {
+      const r = await api.invoke('session:setMute', { track, muted })
+      if (!r.ok) set({ devicesError: r.error.message })
+    },
+
     async validate() {
       const result = await api.invoke('session:validate', buildConfig(get()))
       set({ validation: result.ok ? result.data : null })
@@ -145,8 +196,13 @@ export const useStore = create<AppState>((set, get) => {
       await new Promise((r) => setTimeout(r, 300)) // let React run effect cleanup
       try {
         // Loopback first so PCM is flowing before ffmpeg opens the pipe.
-        if (state.selection.systemAudio) {
+        // Reuse the preview stream when one is already running: a stream that
+        // has been open and metering is known-good, and not restarting it
+        // avoids a fresh endpoint race (M-019/M-020).
+        if (state.selection.systemAudio && !loopback) {
           loopback = await startLoopback()
+        }
+        if (state.selection.systemAudio && !levelTimer) {
           levelTimer = setInterval(() => set({ systemLevel: loopback?.getLevel() ?? 0 }), 100)
         }
         const result = await api.invoke('session:start', buildConfig(state))
@@ -191,7 +247,8 @@ export const useStore = create<AppState>((set, get) => {
         loopback?.stop()
         loopback = null
         if (levelTimer) clearInterval(levelTimer)
-        set({ busy: false, systemLevel: 0, previewsSuspended: false })
+        levelTimer = null
+        set({ busy: false, systemLevel: 0, previewsSuspended: false, systemPreviewOn: false })
       }
     },
   }

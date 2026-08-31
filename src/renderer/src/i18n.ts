@@ -51,6 +51,9 @@ export const en = {
     cameraOff: 'Camera off — no camera track will be recorded.',
     micOff: 'Microphone off — your own voice will not be recorded.',
     systemOff: 'System audio off — other people in the call will not be recorded.',
+    systemCheckHint:
+      'Play something from the meeting now — this bar should move. If it stays flat, Windows is sending the sound to a different output device than the one being captured, and the other people will not be recorded.',
+    systemSilent: 'No system audio is arriving. Check your Windows output device.',
     deviceUnavailable: (label: string) =>
       `"${label}" is switched on but the recorder cannot address it, so it will produce no track. Pick a different device.`,
     estimate: (perHour: string, free: string) => `≈ ${perHour}/hour · ${free} free`,
@@ -62,6 +65,11 @@ export const en = {
     resume: '▶ Resume',
     stop: '■ Stop',
     dropWarning: (n: number) => `⚠ ${n} audio frames dropped`,
+    muteMic: 'Mute mic',
+    unmuteMic: 'Unmute mic',
+    muteSystem: 'Mute system',
+    unmuteSystem: 'Unmute system',
+    mutedNote: 'Muted tracks stay in the file as silence, so the recording joins up correctly.',
     recordingIssues: 'About the recording you just made',
     dismiss: 'Dismiss',
   },

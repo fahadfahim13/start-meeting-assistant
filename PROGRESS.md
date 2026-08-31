@@ -308,7 +308,20 @@ and 170 job rows. Ten pre-database recordings left over from the Phase 1 spikes 
 
 ---
 
-## Open items (non-blocking)
+## Post-v0.1.0 round 2 — reported 2026-08-31 (audio + file size)
+
+Reported: *"system microphone is not working ... or voice ase nai"*, *"doita microphone ek
+sathe kaj kore nah"*, *"on and off ... video er record er moddhe o korte parbo"*, *"video size
+onek besi"*.
+
+| Finding | Status | Notes |
+|---|---|---|
+| System audio capture itself | ✅ works | Measured: a tone played to the default output lands on the system track at −18.9 dB, band-checked at 600–900 Hz. Both tracks record together in one file — `scripts/audio-diagnose.mjs` answers this with a measurement, not a guess |
+| **The real bug: no way to check beforehand** | ✅ fixed | **M-032** — `systemLevel` only updated inside `start()`, so the System meter read zero until Record was pressed. With three active output endpoints on this machine, a loopback on the wrong one was invisible until the meeting was over. The meter now runs live before recording, and `start()` REUSES that stream (which also satisfies M-020's ordering) |
+| Mute mic / system **during** recording | ✅ done | **M-034** — ffmpeg accepts a filter command on the stdin already used for `q`: `cvolume@mic -1 volume 0` (no space after `c`, time field required). Named volume filters mean the track is silenced, never removed, so segments stay concatenable (M-011). Verified live: −20.1 dB → −91.0 dB mid-recording, mic unaffected |
+| File size | ✅ 13× smaller | **M-033 / B-011** — every preset moved from fixed bitrate to quality-based rate control. `high` end-to-end: **3.40 → 0.26 GB/hour**, same 1080p30, same tracks |
+
+### Open items (non-blocking)
 
 | Item | Status | Notes |
 |---|---|---|

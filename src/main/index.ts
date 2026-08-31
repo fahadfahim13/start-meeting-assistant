@@ -112,6 +112,7 @@ function bootstrap(): void {
   handle('session:pause', () => sessions.pause())
   handle('session:resume', () => sessions.resume())
   handle('session:stop', () => sessions.stop())
+  handle('session:setMute', async ({ track, muted }) => sessions.setMuted(track, muted))
   handle('session:status', async () => sessions.status())
 
   handle('meetings:list', async ({ limit }) => {
