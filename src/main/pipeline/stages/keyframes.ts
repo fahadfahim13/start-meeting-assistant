@@ -4,6 +4,7 @@ import { mkdirSync, readFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { resolveBinary } from '@main/platform/binaries'
+import { pipBlankFilter, type PipGeometry } from '@main/capture/pip'
 import { getDb } from '@main/db'
 import { DEFAULT_SELECTION, FRAME_BYTES, pHash, selectKeyframes, type SelectionOptions, type SelectionResult } from './keyframe-select'
 import { log } from '@main/log'
@@ -49,13 +50,27 @@ export async function extractKeyframes(input: {
   mediaPath: string
   workDir: string
   sensitivity?: 'sensitive' | 'balanced' | 'sparse'
+  /**
+   * The camera overlay this recording was made with, from capture_profile.
+   * Present means v:0 has a webcam burned into one corner, and that corner has
+   * to be masked out BEFORE the change score is computed — a talking head in an
+   * otherwise static slide is exactly what scene detection is built to notice,
+   * and it would fill the timeline with keyframes for a screen that never
+   * changed. The full-resolution JPEGs are deliberately left intact: those are
+   * what the user sees in the Library, and they should show the real frame.
+   */
+  overlay?: PipGeometry | null
   onProgress(pct: number): void
 }): Promise<KeyframesOutcome> {
   const grayPath = path.join(input.workDir, 'screen-gray.raw')
 
-  // 1. The whole screen track at 1 fps as raw grayscale.
+  // 1. The whole screen track at 1 fps as raw grayscale. `fps` first, so the
+  //    mask is drawn on one frame a second rather than on every frame.
+  const grayFilter = input.overlay
+    ? `fps=1,${pipBlankFilter(input.overlay)},scale=32:32`
+    : 'fps=1,scale=32:32'
   const grayRes = await run(
-    ['-y', '-i', input.mediaPath, '-map', '0:v:0', '-vf', 'fps=1,scale=32:32', '-pix_fmt', 'gray', '-f', 'rawvideo', grayPath],
+    ['-y', '-i', input.mediaPath, '-map', '0:v:0', '-vf', grayFilter, '-pix_fmt', 'gray', '-f', 'rawvideo', grayPath],
     30 * 60_000,
   )
   if (!grayRes.ok) throw new Error(`gray extraction failed: ${grayRes.stderr.slice(-300)}`)

@@ -96,6 +96,9 @@ System audio (from the renderer's loopback bridge, over stdin):
 
 - Mic and system audio are **never** mixed into one track. `a:0` = mic (you), `a:1` = system (everyone else).
   This is the free, perfect two-way speaker split. Diarization runs on `a:1` **only**.
+- The camera **always** keeps its own raw track. The picture-in-picture overlay (ADR-017) burns a
+  copy into `v:0`; it never replaces `v:1`. The stream count must be identical with the overlay on
+  or off, or segments recorded either side of a fallback stop concatenating (M-011).
 - `contextIsolation: true`, `sandbox: true`, `nodeIntegration: false`. Always.
 - **`shell: false` on every spawn.** No exceptions. argv arrays only. Never interpolate into a command string.
 - No renderer-supplied filesystem path ever crosses IPC. The renderer sends IDs; main resolves paths.
@@ -126,6 +129,7 @@ npm run test:qa        # Q&A report content assertions on a real meeting
 npm run test:storage   # custom recordings folder, including the reset-to-default reversal
 npm run test:features  # transcript edit, speaker-name memory, markers, notes
 npm run diagnose:audio # play a known tone, record, prove system audio is captured
+npm run test:pip       # records twice (overlay on/off) and MEASURES that the camera is on v:0
 ```
 
 Every harness that launches the app must go through `scripts/electron-run.mjs` — see M-030.
@@ -139,9 +143,9 @@ Every harness that launches the app must go through `scripts/electron-run.mjs` �
 list virtualization) and `docs/testing.md` for the manual release gates still open
 (clean-VM install, Narrator pass, 3-hour recording).
 
-- **206 unit tests** · 14+ E2E/content harnesses (recording, pause, crash recovery, sync,
+- **231 unit tests** · 15+ E2E/content harnesses (recording, pause, crash recovery, sync,
   transcription content, diarization, visual, summary, Q&A, pipeline honesty, storage root,
-  feature self-test, forced-software-encode, packaged smoke) · 0 npm audit findings
+  feature self-test, camera overlay, forced-software-encode, packaged smoke) · 0 npm audit findings
 - Installer: `npx electron-builder --win` → release/. Packaged smoke:
   `MEETFROGE_SMOKE=1 release/win-unpacked/MeetFroge.exe` (result in %APPDATA%/MeetFroge/out/)
 - **CI has never run.** The GitHub account is locked for a billing issue, so every workflow
@@ -177,6 +181,10 @@ list virtualization) and `docs/testing.md` for the manual release gates still op
   smaller for the same picture (M-033, B-011).
 - **ffmpeg accepts filter commands on stdin**: `cvolume@mic -1 volume 0`, no space after `c`,
   time field required (M-034).
+- **`hwupload` belongs to the CHAIN, not the encoder** — only ddagrab pushes `-init_hw_device`, so
+  the same h264_amf must NOT be handed an upload on a gdigrab chain (M-036).
+- **`execFileSync` returns stdout; ffmpeg measurements are on stderr** — a harness that reads the
+  wrong stream reports "could not measure" as a failed check (M-037).
 - **Check that a documented mitigation exists** — R-07 claimed "transcript is editable" for
   two phases while it was not (M-035).
 - **Exclusive devices**: previews release before recording (M-007); keep previewsSuspended.

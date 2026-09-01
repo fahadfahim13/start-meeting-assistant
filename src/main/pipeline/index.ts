@@ -14,6 +14,7 @@ import { getSettings } from '@main/db/repositories/settings'
 import * as meetings from '@main/db/repositories/meetings'
 import * as transcripts from '@main/db/repositories/transcripts'
 import { modelAvailable } from '@main/platform/models'
+import { parsePipGeometry, type PipGeometry } from '@main/capture/pip'
 import { log } from '@main/log'
 import { resolveMedia } from '@main/platform/storage'
 import { getDb } from '@main/db'
@@ -31,6 +32,22 @@ export function workDirFor(meetingId: string): string {
   const dir = path.join(app.getPath('userData'), 'work', meetingId)
   mkdirSync(dir, { recursive: true })
   return dir
+}
+
+/**
+ * The camera-overlay geometry this meeting was RECORDED with, if any.
+ *
+ * Read from the row rather than from settings: the user may have moved the
+ * overlay, resized it or switched it off since, and reinterpreting a finished
+ * file under a value that was never true of it is exactly the failure M-031
+ * was written about.
+ */
+function overlayFromProfile(raw: string): PipGeometry | null {
+  try {
+    return parsePipGeometry((JSON.parse(raw) as { cameraOverlay?: unknown }).cameraOverlay)
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -297,6 +314,9 @@ export function createPipeline(events: QueueEvents): JobQueue {
           mediaPath,
           workDir,
           sensitivity: getSettings().keyframeSensitivity,
+          // From the row, not from settings: the overlay may have moved, or
+          // been switched off, since this meeting was recorded (M-031).
+          overlay: overlayFromProfile(meeting.capture_profile),
           onProgress: (pct) => ctx.setProgress(Math.round(pct * 0.9)),
         })
         log.info('pipeline', 'keyframes selected', {

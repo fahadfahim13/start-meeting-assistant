@@ -430,3 +430,58 @@ six resolution sites go through `resolveMedia()`, which picked up one free harde
 
 Existing recordings are never moved. Bulk migration stays deferred (PROGRESS.md, post-1.0);
 `media_root` reduces it to a data operation whenever it is wanted.
+
+---
+
+## ADR-017 — The camera may be composited onto the screen track; ADR-007's separation is kept
+
+**Date:** 2026-09-01 · **Status:** accepted · **Amends:** ADR-007
+
+**Context.** The user asked that while recording the screen with the camera on, the camera appear
+*on* the screen, and that the position be chosen from the recording board. ADR-007 explicitly listed
+*"composited picture-in-picture video with mixed audio"* as a rejected option, and decided
+"composition happens only at export" — so at first reading this request is already settled as a no.
+
+**It is not the same option.** What ADR-007 rejected was the loss of source separation, and it
+rejected it as a bundle: composited video **with mixed audio**. Mixing the audio destroys the free,
+perfect two-way speaker split that the whole transcription and diarization story rests on. Burning a
+copy of the camera into `v:0` destroys nothing, provided the camera also stays where it is.
+
+**Options.**
+1. Composite into `v:0` and drop the separate camera track — one clean video, smaller file.
+2. Composite into `v:0` **and** keep the raw camera as `v:1`.
+3. Keep both tracks untouched and compose only in the app's own player, storing the position as
+   metadata.
+
+**Decision.** Option 2. It costs nothing that matters and buys the properties the other two lose:
+
+- The **stream count is identical** with the overlay on or off. That is not a detail — segments are
+  concatenated with `-map 0` and every segment must carry the same streams (M-011), so option 2 is
+  the only one where a mid-recording fallback to no-overlay still produces a joinable file. The
+  degrade path in `session.ts` depends on exactly this.
+- Nothing downstream had to be taught about a new shape: `detectCameraPresence` still reads
+  `0:v:1` and still finds the raw camera there.
+- The original pixels survive, so a future export can still re-compose at a different position.
+  Option 1 bakes an irreversible choice into the only copy.
+- Encode cost is unchanged — two encoded video streams either way. The camera is decoded once and
+  `split` two ways. Measured added cost is the blend alone: +3.1 s of CPU over a 20 s 1080p15
+  capture, ~+15 points of one core out of twelve (B-013).
+
+Option 3 was rejected because the user asked for the camera to be on the screen, and a composition
+only this app can perform is lock-in by another name (Principle 6) — the file handed to anyone else
+would not have it.
+
+**Consequences.** `v:0` is no longer a clean capture of the screen, so the visual pipeline masks the
+overlay rectangle out before scene detection — a face moving in the corner of a static slide is
+exactly what a change score is built to notice, and it would otherwise fill the timeline with
+keyframes for a screen that never changed. The full-resolution keyframe JPEGs are deliberately left
+composited, because those are what the user sees in the Library.
+
+The geometry is computed in main from the real display height (`scale` cannot reference another
+input's dimensions; only `overlay` knows `main_w`) and **snapshotted into `capture_profile`**, so a
+finished recording is never reinterpreted under a setting the user later changed (M-031). The
+position and size are read once, at `start()`, and every pause/resume respawn reuses that snapshot.
+
+The controls live on the recording board rather than in Settings: it is a framing decision made
+while looking at the preview. They are still persisted app settings, so the choice survives a
+restart — the board is only where they are edited.

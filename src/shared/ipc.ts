@@ -304,6 +304,8 @@ export const INVOKE_CHANNELS = {
       recordingsDirWritable: z.boolean(),
       writeSidecarFiles: z.boolean(),
       outputFormat: z.enum(['mkv', 'mp4']),
+      cameraOverlay: z.enum(['off', 'top-left', 'top-right', 'bottom-left', 'bottom-right']),
+      cameraOverlaySizePct: z.number().int().min(10).max(40),
       models: z.array(
         z.object({
           id: z.string(),
@@ -325,6 +327,10 @@ export const INVOKE_CHANNELS = {
       keyframeSensitivity: z.enum(['sensitive', 'balanced', 'sparse']).optional(),
       writeSidecarFiles: z.boolean().optional(),
       outputFormat: z.enum(['mkv', 'mp4']).optional(),
+      cameraOverlay: z
+        .enum(['off', 'top-left', 'top-right', 'bottom-left', 'bottom-right'])
+        .optional(),
+      cameraOverlaySizePct: z.number().int().min(10).max(40).optional(),
       // NOTE: `recordingsDir` is deliberately absent. A filesystem path may
       // leave main in a RESPONSE but must never enter in a REQUEST — the folder
       // is set only by settings:chooseRecordingsFolder, which owns the dialog

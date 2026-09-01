@@ -29,6 +29,9 @@ extraResources:
     to: bin.manifest.json
   - from: resources/icons
     to: icons
+  # Data assets read by the capture filter graph (the picture-in-picture mask).
+  - from: resources/assets
+    to: assets
 
 win:
   target:

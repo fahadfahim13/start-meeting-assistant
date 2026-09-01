@@ -2,6 +2,7 @@ import type { CaptureConfig, QualityProfile } from '@shared/schemas/capture'
 import { QUALITY_PROFILES } from '@shared/schemas/capture'
 import type { Capabilities, EncoderId } from '@shared/schemas/devices'
 import { AppError } from '@shared/errors'
+import { pipCameraFilters, pipOverlayFilter, type PipGeometry } from './pip'
 
 /**
  * Builds the ffmpeg argv for a recording session.
@@ -12,6 +13,11 @@ import { AppError } from '@shared/errors'
  *
  * Track layout (ADR-007 — mic and system audio are NEVER mixed):
  *   v:0 screen   v:1 camera(optional)   a:0 mic   a:1 system
+ *
+ * With the picture-in-picture overlay on (ADR-017), v:0 additionally carries a
+ * copy of the camera composited into one corner. v:1 is still the RAW camera,
+ * so the stream count does not change and segments recorded with and without
+ * the overlay remain concat-compatible (M-011).
  *
  * PCM transport: spike 2 proved the loopback bridge over stdin (B-006), but a
  * bounded -t recording needs no stop command. Interactive stop does: ffmpeg's
@@ -50,13 +56,23 @@ export interface BuildInput {
    * is passed back in here to survive the respawn.
    */
   muted?: { mic?: boolean; system?: boolean }
+  /**
+   * Composite the camera onto the screen track (ADR-017), or null for the
+   * pre-overlay behaviour. Main-resolved like `output` and `muted`: the
+   * geometry is snapshotted at session start and the mask path comes from app
+   * resources, so neither can be influenced by the renderer.
+   *
+   * Ignored unless BOTH a screen and a camera are being recorded — there is
+   * nothing to composite onto, or nothing to composite.
+   */
+  pip?: { geometry: PipGeometry; maskPath: string } | null
 }
 
 export interface BuiltCommand {
   args: string[]
   encoder: EncoderId
   /** Indices for diagnostics/tests. */
-  trackLayout: { screen: boolean; camera: boolean; mic: boolean; system: boolean }
+  trackLayout: { screen: boolean; camera: boolean; mic: boolean; system: boolean; pip: boolean }
 }
 
 /**
@@ -87,6 +103,39 @@ function encoderPixelFormat(encoder: EncoderId): string {
 const AMF_MIN_DIMENSION = 128
 
 /**
+ * The format the picture-in-picture composite happens in.
+ *
+ * `overlay` is a SOFTWARE filter — it cannot consume the d3d11 surface the AMF
+ * chain normally ends with, so when compositing, every screen chain stops one
+ * step early in system memory and the encoder's own conversion moves to
+ * compositeTailFilter(). yuv420 is overlay's cheapest alpha path and the
+ * fewest bytes to blend, which matters on a memory-bandwidth-bound 15W part.
+ */
+const COMPOSITE_PIXEL_FORMAT = 'yuv420p'
+
+/**
+ * Put the composited frame into the format the encoder demands — the tail the
+ * screen chain would have carried itself if nothing were being overlaid.
+ * M-001 still holds: the encoder is handed an explicit pixel format, once.
+ *
+ * `uploadToHw` is NOT simply "the encoder is AMF". Only the ddagrab chain ends
+ * in `hwupload`, because only ddagrab causes `-init_hw_device d3d11va` to be
+ * pushed; the gdigrab chains hand AMF plain system-memory nv12 and it uploads
+ * internally. Uploading unconditionally fails the whole graph with
+ * `A hardware device reference is required to upload frames to` — measured, not
+ * guessed, while building this (M-036).
+ */
+function compositeTailFilter(
+  encoder: EncoderId,
+  inLabel: string,
+  outLabel: string,
+  uploadToHw: boolean,
+): string {
+  const upload = uploadToHw ? ',hwupload' : ''
+  return `[${inLabel}]format=${encoderPixelFormat(encoder)}${upload}[${outLabel}]`
+}
+
+/**
  * The chain for a gdigrab source — window capture and the no-ddagrab desktop
  * fallback both land here.
  *
@@ -102,10 +151,16 @@ const AMF_MIN_DIMENSION = 128
  * enforces both the AMF floor and h264's even-dimension requirement.
  * The `\,` escapes are required — inside a filter, a bare comma is a separator.
  */
-export function gdigrabFilter(inputIndex: number, encoder: EncoderId, fps: number): string {
-  const pix = encoderPixelFormat(encoder)
+export function gdigrabFilter(
+  inputIndex: number,
+  encoder: EncoderId,
+  fps: number,
+  compositing = false,
+  outLabel = 'vscreen',
+): string {
+  const pix = compositing ? COMPOSITE_PIXEL_FORMAT : encoderPixelFormat(encoder)
   const even = (dim: string): string => `ceil(max(${dim}\\,${AMF_MIN_DIMENSION})/2)*2`
-  return `[${inputIndex}:v]fps=${fps},pad=${even('iw')}:${even('ih')},format=${pix}[vscreen]`
+  return `[${inputIndex}:v]fps=${fps},pad=${even('iw')}:${even('ih')},format=${pix}[${outLabel}]`
 }
 
 /**
@@ -116,18 +171,29 @@ export function gdigrabFilter(inputIndex: number, encoder: EncoderId, fps: numbe
  * that exact chain is what the capability probe and the forced-software-encode
  * E2E exercise. Do not "unify" it with encoderPixelFormat().
  */
-function screenFilter(encoder: EncoderId, displayIndex: number, fps: number): string {
+function screenFilter(
+  encoder: EncoderId,
+  displayIndex: number,
+  fps: number,
+  compositing = false,
+  outLabel = 'vscreen',
+): string {
   const src = `ddagrab=${displayIndex}:framerate=${fps}`
+  if (compositing) {
+    // Stop in system memory: the overlay has to happen before any hwupload, and
+    // before the encoder's own pixel format, both of which move to the tail.
+    return `${src},hwdownload,format=bgra,format=${COMPOSITE_PIXEL_FORMAT}[${outLabel}]`
+  }
   switch (encoder) {
     case 'h264_amf':
       // AMF consumes d3d11 NV12 surfaces; the explicit conversion is mandatory.
-      return `${src},hwdownload,format=bgra,format=nv12,hwupload[vscreen]`
+      return `${src},hwdownload,format=bgra,format=nv12,hwupload[${outLabel}]`
     case 'h264_nvenc':
     case 'h264_qsv':
-      return `${src},hwdownload,format=bgra,format=nv12[vscreen]`
+      return `${src},hwdownload,format=bgra,format=nv12[${outLabel}]`
     case 'libx264':
     case 'libx264_ultrafast':
-      return `${src},hwdownload,format=bgra[vscreen]`
+      return `${src},hwdownload,format=bgra[${outLabel}]`
   }
 }
 
@@ -169,6 +235,11 @@ export function buildCaptureArgs(input: BuildInput): BuiltCommand {
   const profile: QualityProfile = QUALITY_PROFILES[config.preset]
   const encoder = pickEncoder(capabilities)
 
+  // The overlay needs something to sit on and something to sit there — with
+  // either missing there is nothing to composite, and the whole feature falls
+  // back to null, which is precisely the pre-ADR-017 argv.
+  const pip = config.screen && config.camera ? (input.pip ?? null) : null
+
   const args: string[] = ['-hide_banner', '-loglevel', 'info', '-y']
 
   // ddagrab requires the d3d11 device before any input is opened.
@@ -181,6 +252,7 @@ export function buildCaptureArgs(input: BuildInput): BuiltCommand {
   let systemInput = -1
   let cameraInput = -1
   let windowInput = -1
+  let maskInput = -1
 
   // NOTE on alignment: each input's t=0 is its own open moment, so the mic
   // and system tracks carry a relative offset measured at ~120-230 ms on
@@ -217,6 +289,15 @@ export function buildCaptureArgs(input: BuildInput): BuiltCommand {
     cameraInput = inputIndex++
   }
 
+  if (pip) {
+    // The rounded-corner alpha mask, as an INPUT rather than a `movie=` filter
+    // source: a Windows path inside a filter string would need its drive colon
+    // escaped, and getting that wrong costs the whole recording. `-loop 1`
+    // because a single still frame must keep feeding alphamerge for hours.
+    args.push('-loop', '1', '-framerate', String(profile.cameraFps), '-i', pip.maskPath)
+    maskInput = inputIndex++
+  }
+
   // Window capture is a plain gdigrab input rather than a lavfi source.
   if (config.screen && config.screen.kind === 'window') {
     if (!config.screen.windowTitle) {
@@ -234,6 +315,11 @@ export function buildCaptureArgs(input: BuildInput): BuiltCommand {
   const filters: string[] = []
   let screenLabel: string | null = null
 
+  // While compositing, the screen chain stops at an intermediate pad and the
+  // overlay produces [vscreen] instead. Everything downstream — the mapping,
+  // the metadata, the encoder args — is unchanged either way.
+  const screenOut = pip ? 'vscr' : 'vscreen'
+
   if (config.screen) {
     if (config.screen.kind === 'screen') {
       if (!usesDdagrab) {
@@ -243,24 +329,50 @@ export function buildCaptureArgs(input: BuildInput): BuiltCommand {
         // gdigrab desktop fallback comes in as its own input instead.
         args.push('-f', 'gdigrab', '-framerate', String(profile.screenFps), '-i', 'desktop')
         windowInput = inputIndex++
-        filters.push(gdigrabFilter(windowInput, encoder, profile.screenFps))
-        screenLabel = 'vscreen'
+        filters.push(gdigrabFilter(windowInput, encoder, profile.screenFps, Boolean(pip), screenOut))
       } else {
-        filters.push(screenFilter(encoder, config.screen.displayIndex ?? 0, profile.screenFps))
-        screenLabel = 'vscreen'
+        filters.push(
+          screenFilter(encoder, config.screen.displayIndex ?? 0, profile.screenFps, Boolean(pip), screenOut),
+        )
       }
     } else {
-      filters.push(gdigrabFilter(windowInput, encoder, profile.screenFps))
-      screenLabel = 'vscreen'
+      filters.push(gdigrabFilter(windowInput, encoder, profile.screenFps, Boolean(pip), screenOut))
     }
+    screenLabel = screenOut
   }
 
   if (cameraInput >= 0) {
     // Same M-001 rule as the screen chain, second instance (see M-007): the
     // camera frames must arrive in the encoder's input format.
+    //
+    // When compositing, one decode feeds two consumers via `split`: the raw
+    // camera track that has always been there, and the small copy that gets
+    // burned into the screen. Two encodes either way — the added cost is the
+    // scale and the blend, not a second capture.
+    const camSrc = `[${cameraInput}:v]fps=${profile.cameraFps}`
+    if (pip) {
+      filters.push(`${camSrc},split=2[camraw][campip]`)
+      filters.push(`[camraw]scale=-2:480,format=${encoderPixelFormat(encoder)}[vcam]`)
+      filters.push(
+        ...pipCameraFilters({
+          cameraLabel: 'campip',
+          maskInputIndex: maskInput,
+          geom: pip.geometry,
+          outLabel: 'pip',
+        }),
+      )
+    } else {
+      filters.push(`${camSrc},scale=-2:480,format=${encoderPixelFormat(encoder)}[vcam]`)
+    }
+  }
+
+  if (pip && screenLabel) {
     filters.push(
-      `[${cameraInput}:v]fps=${profile.cameraFps},scale=-2:480,format=${encoderPixelFormat(encoder)}[vcam]`,
+      pipOverlayFilter({ screenLabel, pipLabel: 'pip', geom: pip.geometry, outLabel: 'vmix' }),
     )
+    // Only the ddagrab chain has a d3d11 device to upload back into.
+    filters.push(compositeTailFilter(encoder, 'vmix', 'vscreen', encoder === 'h264_amf' && usesDdagrab))
+    screenLabel = 'vscreen'
   }
 
   // Each audio track passes through a NAMED volume filter so it can be muted
@@ -286,6 +398,7 @@ export function buildCaptureArgs(input: BuildInput): BuiltCommand {
     camera: cameraInput >= 0,
     mic: micInput >= 0,
     system: systemInput >= 0,
+    pip: pip !== null,
   }
 
   // Every video source now arrives through a filter chain (M-021), so the label
@@ -306,7 +419,9 @@ export function buildCaptureArgs(input: BuildInput): BuiltCommand {
 
   // Self-describing track titles (ffprobe output stays readable — B-006).
   let v = 0
-  if (screenLabel) args.push(`-metadata:s:v:${v++}`, 'title=Screen')
+  // The title says what the track actually contains — someone opening the file
+  // in a year should not have to guess why there is a face in the corner.
+  if (screenLabel) args.push(`-metadata:s:v:${v++}`, pip ? 'title=Screen + Camera' : 'title=Screen')
   if (cameraInput >= 0) args.push(`-metadata:s:v:${v}`, 'title=Camera')
   let a = 0
   if (micInput >= 0) args.push(`-metadata:s:a:${a++}`, 'title=Microphone')

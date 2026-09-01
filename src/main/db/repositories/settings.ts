@@ -37,6 +37,20 @@ export const SettingsSchema = z.object({
    * setting.
    */
   outputFormat: z.enum(['mkv', 'mp4']).default('mkv'),
+  /**
+   * Where the camera sits ON the screen track (ADR-017), or 'off' to keep the
+   * pre-overlay behaviour of two unrelated pictures.
+   *
+   * Only ever affects `v:0`; the raw camera is still written to `v:1` either
+   * way. Read ONCE at session start and snapshotted into capture_profile — a
+   * finished recording must not be reinterpreted under a value the user has
+   * since changed (M-031).
+   */
+  cameraOverlay: z
+    .enum(['off', 'top-left', 'top-right', 'bottom-left', 'bottom-right'])
+    .default('bottom-right'),
+  /** Overlay height as a percentage of the captured screen height. */
+  cameraOverlaySizePct: z.number().int().min(10).max(40).default(22),
 })
 export type AppSettings = z.infer<typeof SettingsSchema>
 

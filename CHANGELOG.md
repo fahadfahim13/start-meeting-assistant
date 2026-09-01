@@ -9,6 +9,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Camera on the screen (picture-in-picture)** — while recording a screen with the camera on, the
+  camera is composited into a corner of the main picture, as a rounded card with a thin border.
+  Position (four corners) and size (10–40% of screen height) are chosen on the recording board, and
+  the screen preview shows the live camera exactly where it will land. The camera is **also** still
+  written as its own raw track, so nothing is lost and the position can be changed for future
+  recordings. On by default, bottom right; see ADR-017, measured cost in B-013.
 - **Q&A report** — an on-demand FAQ-style briefing generated from the meeting, each answer
   carrying a timestamp that is snapped to a real transcript segment or dropped entirely.
 - **Transcript editing** — correct any line; the full-text index is rewritten in the same

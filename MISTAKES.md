@@ -953,3 +953,61 @@ the mitigation exists — a documented mitigation nobody implemented is worse th
 acknowledged gap, because it stops anyone from looking. Three of this project's own deferred
 items ("inline edit", "export md/pdf/docx", "bulk operations") were quietly load-bearing
 somewhere else in the docs.
+
+---
+
+## M-036 — `hwupload` is not a property of the encoder, it is a property of the chain
+
+**Date:** 2026-09-01 · **Area:** capture / ffmpeg filters
+
+**Symptom:** the picture-in-picture composite worked perfectly on the ddagrab path and killed the
+recording outright on the gdigrab path:
+
+```
+[hwupload @ ...] A hardware device reference is required to upload frames to.
+[AVFilterGraph @ ...] Error initializing filters
+Error : Invalid argument
+```
+
+**Cause:** `overlay` is a software filter, so compositing has to happen in system memory — which
+means the AMF chain can no longer end with `hwupload` and the upload moves to after the overlay.
+Writing that tail as "if the encoder is h264_amf, append `hwupload`" looks obviously right and is
+wrong. `-init_hw_device d3d11va` is pushed **only when ddagrab is used**. The gdigrab chains hand
+h264_amf plain system-memory nv12 and it uploads internally, so on those chains there is no device
+to upload into at all. Same encoder, same pixel format, opposite requirement.
+
+**Fix:** the tail takes an explicit `uploadToHw` argument, computed as
+`encoder === 'h264_amf' && usesDdagrab` — the same condition that decided whether to push
+`-init_hw_device` in the first place. Pinned by a unit test asserting the gdigrab composite contains
+`overlay=` and no `hwupload` at all.
+
+**Rule:** M-001 says never assume a filter's output format matches the encoder's input format. This
+is its other half: **never infer a chain's requirements from the encoder alone.** The hardware
+context is a property of how the frames were produced, not of what will consume them. Whenever a
+filter is inserted into the middle of an existing chain, re-derive the tail from the SAME condition
+that built the head — do not restate it.
+
+---
+
+## M-037 — `execFileSync` returns stdout; ffmpeg measurements come out of stderr
+
+**Date:** 2026-09-01 · **Area:** harnesses
+
+**Symptom:** `npm run test:pip` reported `PSNR: n/a dB` for both the overlay-on run and the
+overlay-off control, and failed both assertions — which reads exactly like "the overlay is not being
+composited", when in fact the app's own log said `layout: {..., pip: true}` and the recording was
+perfect.
+
+**Cause:** the harness read the psnr filter's summary from `execFileSync`'s return value, which is
+**stdout only**. Every ffmpeg log line, the psnr summary included, goes to stderr. The regex matched
+an empty string, the helper returned `null`, and `null` compared against a threshold silently
+becomes a failure rather than an error.
+
+**Fix:** `spawnSync` and match against `stdout + stderr`, and when the number cannot be parsed at
+all, print ffmpeg's last 400 bytes of stderr instead of returning a bare `null`. The distinction
+matters: "measured 7 dB" and "could not measure" are different results and must not print the same.
+
+**Rule:** a measurement harness must be able to tell *failed the check* from *never took the
+measurement*. A helper that returns `null` on both collapses them into one FAIL line and sends you
+looking for a bug in the feature instead of in the ruler. This is M-004's family — the signal went
+somewhere nobody was reading.

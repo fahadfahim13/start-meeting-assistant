@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
-import { enabledButUnavailable, useStore } from './store'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { enabledButUnavailable, useStore, type OverlayPosition } from './store'
 import { api } from './api'
 import { startMeter, type MeterHandle } from './audio/meter'
 import Library from './features/Library'
@@ -31,43 +31,164 @@ function fmtElapsed(ms: number): string {
   return `${pad(h)}:${pad(m)}:${pad(sec)}`
 }
 
+const OVERLAY_CORNERS: OverlayPosition[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right']
+
 /**
- * A level meter that also OWNS the mute control for its track.
+ * Where the camera sits on the screen, chosen on the board rather than buried
+ * in Settings — it is a framing decision, and it belongs next to the thing
+ * being framed.
  *
- * The mute buttons used to live in the footer next to the transport controls,
- * where nothing showed which track they had affected — the footer read
- * "RECORDING · 4.0 MB · h264_amf" and nothing else. Putting the control on the
- * meter makes the state and the thing it controls the same object.
+ * The corner buttons are pictures, not words: each one is a miniature screen
+ * with the camera box drawn at the size and corner it will actually occupy, so
+ * the control shows the outcome instead of describing it. Everything is frozen
+ * during a recording, because the geometry is snapshotted at start and a later
+ * change could not apply to segments already written (M-031, M-011).
  */
-function Meter({
+function CameraOverlayControl({
+  overlay,
+  available,
+  locked,
+  onChange,
+}: {
+  overlay: { cameraOverlay: OverlayPosition; cameraOverlaySizePct: number } | null
+  available: boolean
+  locked: boolean
+  onChange(patch: { cameraOverlay?: OverlayPosition; cameraOverlaySizePct?: number }): void
+}): React.JSX.Element | null {
+  // Remembered so unticking and re-ticking the box returns you to the corner
+  // you chose, rather than silently resetting to the default.
+  const [lastCorner, setLastCorner] = useState<OverlayPosition>('bottom-right')
+  if (!overlay) return null
+
+  const on = overlay.cameraOverlay !== 'off'
+  const disabled = locked || !available
+
+  return (
+    <div className="pip-control">
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={on}
+          disabled={disabled}
+          onChange={(e) => onChange({ cameraOverlay: e.target.checked ? lastCorner : 'off' })}
+        />
+        {t.setup.overlayEnabled}
+      </label>
+
+      {!available && <p className="hint">{t.setup.overlayNeedsBoth}</p>}
+
+      {on && (
+        <>
+          <span className="pip-label">{t.setup.overlayPosition}</span>
+          <div className="pip-picker" role="radiogroup" aria-label={t.setup.overlayPosition}>
+            {OVERLAY_CORNERS.map((corner) => (
+              <button
+                key={corner}
+                type="button"
+                role="radio"
+                aria-checked={overlay.cameraOverlay === corner}
+                aria-label={t.setup.overlayCorner[corner as keyof typeof t.setup.overlayCorner]}
+                title={t.setup.overlayCorner[corner as keyof typeof t.setup.overlayCorner]}
+                disabled={disabled}
+                className={`pip-cell ${overlay.cameraOverlay === corner ? 'selected' : ''}`}
+                onClick={() => {
+                  setLastCorner(corner)
+                  onChange({ cameraOverlay: corner })
+                }}
+              >
+                <span
+                  className={`pip-dot ${corner}`}
+                  style={{ height: `${overlay.cameraOverlaySizePct}%` }}
+                />
+              </button>
+            ))}
+          </div>
+
+          <label>
+            {t.setup.overlaySizeValue(overlay.cameraOverlaySizePct)}
+            <input
+              type="range"
+              min={10}
+              max={40}
+              step={1}
+              value={overlay.cameraOverlaySizePct}
+              disabled={disabled}
+              onChange={(e) => onChange({ cameraOverlaySizePct: Number(e.target.value) })}
+            />
+          </label>
+          <p className="hint">{locked ? t.setup.overlayLockedWhileRecording : t.setup.overlayNote}</p>
+        </>
+      )}
+    </div>
+  )
+}
+
+/**
+ * A level meter that owns its track's control, in every state.
+ *
+ * The button used to appear only while recording, and when a source was off the
+ * meter was replaced by a line of text — so in the preview there was no control
+ * at all, and nothing said whether a track would be recorded. Now there is one
+ * row per audio track, always, carrying:
+ *
+ *   OFF    won't be recorded          -> button turns it on
+ *   (idle) will be recorded           -> button turns it off
+ *   REC    being recorded now         -> button mutes it
+ *   MUTED  recording silence now      -> button unmutes it
+ *
+ * The control and the state it controls are the same object, which is the whole
+ * point: previously they were in different parts of the window.
+ */
+type TrackState = 'off' | 'ready' | 'recording' | 'muted'
+
+function TrackMeter({
   level,
   label,
-  muted,
-  onToggleMute,
+  state,
+  onToggle,
 }: {
   level: number
   label: string
-  muted?: boolean
-  onToggleMute?: () => void
+  state: TrackState
+  onToggle: () => void
 }): React.JSX.Element {
-  const pct = muted ? 0 : Math.min(100, level * 300)
+  const live = state === 'recording'
+  const pct = live ? Math.min(100, level * 300) : state === 'ready' ? Math.min(100, level * 300) : 0
+  const badge =
+    state === 'off' ? t.preview.offBadge : state === 'muted' ? t.preview.mutedBadge : state === 'recording' ? t.preview.recBadge : null
+  const title =
+    state === 'off'
+      ? t.preview.trackWillNotRecord
+      : state === 'muted'
+        ? t.preview.trackMuted
+        : state === 'recording'
+          ? t.preview.trackRecording
+          : t.preview.trackWillRecord
+  const action =
+    state === 'off'
+      ? t.preview.turnOn
+      : state === 'muted'
+        ? t.preview.unmute
+        : state === 'recording'
+          ? t.preview.mute
+          : t.preview.turnOff
+
   return (
     <div
-      className={`meter-row ${muted ? 'muted' : ''}`}
+      className={`meter-row state-${state}`}
       role="meter"
-      aria-label={`${label} level${muted ? ', muted' : ''}`}
+      aria-label={`${label} level, ${title}`}
       aria-valuenow={Math.round(pct)}
+      title={title}
     >
       <span className="meter-label">{label}</span>
       <div className="meter-track">
         <div className="meter-fill" style={{ width: `${pct}%`, background: level > 0.003 ? '#3fb950' : '#484f58' }} />
       </div>
-      {muted && <span className="meter-muted-badge">{t.preview.mutedBadge}</span>}
-      {onToggleMute && (
-        <button className="ghost small" aria-pressed={muted} onClick={onToggleMute}>
-          {muted ? t.preview.unmute : t.preview.mute}
-        </button>
-      )}
+      {badge && <span className={`meter-badge badge-${state}`}>{badge}</span>}
+      <button className="ghost small" onClick={onToggle}>
+        {action}
+      </button>
     </div>
   )
 }
@@ -75,11 +196,34 @@ function Meter({
 export default function App(): React.JSX.Element {
   const s = useStore()
   const videoRef = useRef<HTMLVideoElement>(null)
+  /**
+   * The live camera stream, kept in a ref so the overlay mock-up can attach to
+   * it whenever it mounts — the mock-up appears and disappears with the screen
+   * preview, which is not on the same schedule as getUserMedia resolving.
+   */
+  const camStreamRef = useRef<MediaStream | null>(null)
+  /** Second view of the SAME camera stream, drawn where it will be burned in. */
+  const pipVideoRef = useRef<HTMLVideoElement | null>(null)
+  /**
+   * Stable ref callback, and it has to be stable.
+   *
+   * An inline `ref={(el) => ...}` is a new function every render, so React
+   * detaches and reattaches it EVERY time — and the screen preview re-renders
+   * this component on a 5-second poll. Re-assigning `srcObject` restarts the
+   * media element even when the stream is identical, which showed up as the
+   * camera visibly blinking every few seconds. useCallback pins it to mount,
+   * and the identity check makes a redundant assignment impossible anyway.
+   */
+  const attachPipVideo = useCallback((el: HTMLVideoElement | null) => {
+    pipVideoRef.current = el
+    if (el && el.srcObject !== camStreamRef.current) el.srcObject = camStreamRef.current
+  }, [])
   const [micLevel, setMicLevel] = useState(0)
   const [tab, setTab] = useState<'record' | 'library' | 'settings'>('record')
 
   useEffect(() => {
     void s.refreshDevices()
+    void s.loadOverlay()
   }, [])
 
   // E2E harness (?autorec=N): record unattended through the full production
@@ -112,6 +256,15 @@ export default function App(): React.JSX.Element {
   const recording = s.session?.state === 'recording'
   const paused = s.session?.state === 'paused'
   const inSession = recording || paused || s.session?.state === 'finalizing'
+  /**
+   * The corner the overlay will land in, or null when there will be no overlay.
+   * Mirrors the builder's own guard: it takes a screen AND a camera to have
+   * something to composite.
+   */
+  const pipCorner =
+    s.overlay && s.overlay.cameraOverlay !== 'off' && s.selection.cameraEnabled && s.selection.cameraDeviceId
+      ? s.overlay.cameraOverlay
+      : null
   const [preview, setPreview] = useState<PreviewState>({ kind: 'idle', url: null })
   // Keyed by content so a NEW set of warnings reappears after being dismissed.
   const [dismissedWarnings, setDismissedWarnings] = useState('')
@@ -182,12 +335,21 @@ export default function App(): React.JSX.Element {
       .then((st) => {
         stream = st
         el.srcObject = st
+        // The overlay mock-up shows the SAME stream in a second element rather
+        // than opening the camera twice — one exclusive device, one owner
+        // (M-007). It may not be mounted yet; its ref callback handles that.
+        camStreamRef.current = st
+        if (pipVideoRef.current && pipVideoRef.current.srcObject !== st) {
+          pipVideoRef.current.srcObject = st
+        }
       })
       .catch(() => {
         /* preview failure is non-fatal */
       })
     return () => {
       if (el) el.srcObject = null
+      if (pipVideoRef.current) pipVideoRef.current.srcObject = null
+      camStreamRef.current = null
       stream?.getTracks().forEach((t) => t.stop())
     }
   }, [s.selection.cameraDeviceId, s.selection.cameraEnabled, recording, s.previewsSuspended])
@@ -337,6 +499,15 @@ export default function App(): React.JSX.Element {
             </select>
           </label>
 
+          <CameraOverlayControl
+            overlay={s.overlay}
+            available={Boolean(
+              s.selection.cameraEnabled && s.selection.cameraDeviceId && s.selection.screenId,
+            )}
+            locked={inSession}
+            onChange={(patch) => void s.setOverlay(patch)}
+          />
+
           <label className="check">
             <input
               type="checkbox"
@@ -397,7 +568,24 @@ export default function App(): React.JSX.Element {
           <h2>{t.preview.heading}</h2>
           {preview.kind === 'ok' && preview.url ? (
             <>
-              <img src={preview.url} alt="Selected screen preview" className="screen-preview" />
+              {/* The screen preview doubles as the overlay's what-you-will-get
+                  readout: the same live camera stream, in the corner and at the
+                  size it will be burned in at. A position control that only
+                  described itself would be the M-032 mistake again. */}
+              <div className="screen-preview-wrap">
+                <img src={preview.url} alt="Selected screen preview" className="screen-preview" />
+                {pipCorner && (
+                  <video
+                    ref={attachPipVideo}
+                    autoPlay
+                    muted
+                    playsInline
+                    aria-hidden="true"
+                    className={`pip-preview-cam ${pipCorner}`}
+                    style={{ height: `${s.overlay?.cameraOverlaySizePct ?? 22}%` }}
+                  />
+                )}
+              </div>
               <p className="preview-note">{t.preview.screenLabel}</p>
             </>
           ) : preview.kind === 'not-found' ? (
@@ -416,41 +604,48 @@ export default function App(): React.JSX.Element {
           ) : (
             <p className="preview-note source-off">{t.preview.cameraOff}</p>
           )}
-          {s.selection.microphoneEnabled && s.selection.microphoneDeviceId ? (
-            <Meter
-              level={micLevel}
-              label={t.preview.mic}
-              muted={inSession ? s.session?.mutedMic : undefined}
-              onToggleMute={
-                inSession ? () => void s.setMuted('mic', !s.session?.mutedMic) : undefined
-              }
-            />
-          ) : (
-            <p className="preview-note source-off" aria-label={t.preview.micOff}>
-              {t.preview.micOff}
-            </p>
-          )}
-          {s.selection.systemAudio ? (
-            <>
-              <Meter
-                level={s.systemLevel}
-                label={t.preview.system}
-                muted={inSession ? s.session?.mutedSystem : undefined}
-                onToggleMute={
-                  inSession ? () => void s.setMuted('system', !s.session?.mutedSystem) : undefined
-                }
-              />
-              {!inSession && (
-                <p className={s.systemPreviewOn && s.systemLevel < 0.001 ? 'preview-note warn-note' : 'preview-note'}>
-                  {s.systemPreviewOn && s.systemLevel < 0.001
-                    ? t.preview.systemSilent
-                    : t.preview.systemCheckHint}
-                </p>
-              )}
-            </>
-          ) : (
-            <p className="preview-note source-off" aria-label={t.preview.systemOff}>
-              {t.preview.systemOff}
+          <TrackMeter
+            level={micLevel}
+            label={t.preview.mic}
+            state={
+              !s.selection.microphoneEnabled || !s.selection.microphoneDeviceId
+                ? 'off'
+                : inSession
+                  ? s.session?.mutedMic
+                    ? 'muted'
+                    : 'recording'
+                  : 'ready'
+            }
+            onToggle={() => {
+              // Before recording the control turns the SOURCE on or off; during
+              // a recording it mutes, because the track cannot be removed once
+              // the segments have started (M-011).
+              if (inSession) void s.setMuted('mic', !s.session?.mutedMic)
+              else s.select({ microphoneEnabled: !s.selection.microphoneEnabled })
+            }}
+          />
+          <TrackMeter
+            level={s.systemLevel}
+            label={t.preview.system}
+            state={
+              !s.selection.systemAudio
+                ? 'off'
+                : inSession
+                  ? s.session?.mutedSystem
+                    ? 'muted'
+                    : 'recording'
+                  : 'ready'
+            }
+            onToggle={() => {
+              if (inSession) void s.setMuted('system', !s.session?.mutedSystem)
+              else s.select({ systemAudio: !s.selection.systemAudio })
+            }}
+          />
+          {s.selection.systemAudio && !inSession && (
+            <p className={s.systemPreviewOn && s.systemLevel < 0.001 ? 'preview-note warn-note' : 'preview-note'}>
+              {s.systemPreviewOn && s.systemLevel < 0.001
+                ? t.preview.systemSilent
+                : t.preview.systemCheckHint}
             </p>
           )}
           {unavailable.map((label) => (

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildCaptureArgs, pickEncoder } from '../../src/main/capture/ffmpeg-builder'
+import { pipGeometry } from '../../src/main/capture/pip'
 import type { CaptureConfig } from '../../src/shared/schemas/capture'
 import type { Capabilities } from '../../src/shared/schemas/devices'
 
@@ -247,5 +248,100 @@ describe('buildCaptureArgs', () => {
 
   it('throws CAPTURE_ENCODER_FAILED when no encoder works', () => {
     expect(() => pickEncoder(caps([]))).toThrowError(/no working encoder/)
+  })
+})
+
+describe('camera overlay (ADR-017)', () => {
+  const geom = pipGeometry({ position: 'bottom-right', sizePct: 22, screenHeightPx: 1080 })!
+  const pip = { geometry: geom, maskPath: 'C:/res/assets/pip-mask-16x9.png' }
+
+  const build = (over: Partial<Parameters<typeof buildCaptureArgs>[0]> = {}) =>
+    buildCaptureArgs({
+      config: fullConfig,
+      capabilities: caps(['h264_amf']),
+      output: { kind: 'single' as const, path: 'C:/out/x.mkv' },
+      pcmPipePath: '\\\\.\\pipe\\test',
+      pip,
+      ...over,
+    })
+
+  const filterOf = (args: string[]): string => args[args.indexOf('-filter_complex') + 1]!
+  const mapsOf = (args: string[]): string[] => args.filter((_, i) => args[i - 1] === '-map')
+
+  it('keeps the RAW camera as its own track — the stream count does not change', () => {
+    const { args, trackLayout } = build()
+    expect(trackLayout.pip).toBe(true)
+    const maps = mapsOf(args)
+    // Exactly the same two video maps as without the overlay. This is what
+    // lets a degraded respawn produce segments that still concatenate (M-011).
+    expect(maps.filter((m) => m === '[vscreen]' || m === '[vcam]')).toEqual(['[vscreen]', '[vcam]'])
+    expect(filterOf(args)).toContain('split=2[camraw][campip]')
+    expect(filterOf(args)).toContain('format=nv12[vcam]')
+  })
+
+  it('composites in system memory and uploads ONCE, after the overlay (M-001)', () => {
+    const filter = filterOf(build().args)
+    // The screen chain must NOT still end in hwupload — overlay is a software
+    // filter and cannot consume a d3d11 surface.
+    expect(filter).not.toContain('format=nv12,hwupload[vscr]')
+    expect(filter).toContain('hwdownload,format=bgra,format=yuv420p[vscr]')
+    expect(filter.match(/hwupload/g)).toHaveLength(1)
+    expect(filter.indexOf('overlay=')).toBeLessThan(filter.indexOf('hwupload'))
+    expect(filter).toContain('[vmix]format=nv12,hwupload[vscreen]')
+  })
+
+  it('does NOT hwupload on the gdigrab path — there is no d3d11 device there (M-036)', () => {
+    // gdigrab means no `-init_hw_device`, so an unconditional hwupload fails
+    // the whole graph with "A hardware device reference is required".
+    const { args } = build({
+      config: {
+        ...fullConfig,
+        screen: { ...fullConfig.screen!, kind: 'window', windowTitle: 'Zoom Meeting' },
+      },
+    })
+    expect(args).not.toContain('-init_hw_device')
+    const filter = filterOf(args)
+    expect(filter).toContain('overlay=')
+    expect(filter).not.toContain('hwupload')
+    expect(filter).toContain('[vmix]format=nv12[vscreen]')
+  })
+
+  it('passes the mask as an input rather than a path inside the filter string', () => {
+    const { args } = build()
+    expect(args).toContain(pip.maskPath)
+    expect(args[args.indexOf(pip.maskPath) - 1]).toBe('-i')
+    expect(filterOf(args)).not.toContain('movie=')
+    expect(filterOf(args)).not.toContain(pip.maskPath)
+    // -loop 1, or a single still frame stops feeding alphamerge after one frame.
+    expect(args).toContain('-loop')
+  })
+
+  it('still forbids a bare N:v mapping (M-021)', () => {
+    const maps = mapsOf(build().args)
+    expect(maps.some((m) => /^\d+:v$/.test(m))).toBe(false)
+  })
+
+  it('ignores the overlay when there is nothing to composite onto or with', () => {
+    for (const config of [
+      { ...fullConfig, camera: null },
+      { ...fullConfig, screen: null },
+    ]) {
+      const { args, trackLayout } = build({ config })
+      expect(trackLayout.pip).toBe(false)
+      expect(filterOf(args)).not.toContain('overlay=')
+      expect(args).not.toContain(pip.maskPath)
+    }
+  })
+
+  it('leaves the argv untouched when the overlay is off', () => {
+    const base = { config: fullConfig, capabilities: caps(['h264_amf']), output: { kind: 'single' as const, path: 'C:/out/x.mkv' }, pcmPipePath: '\\\\.\\pipe\\test' }
+    // The regression pin: `pip: null` must be byte-identical to not passing it,
+    // which is what keeps the verified recipes in CLAUDE.md verified.
+    expect(buildCaptureArgs({ ...base, pip: null }).args).toEqual(buildCaptureArgs(base).args)
+  })
+
+  it('names the composited track for what it holds', () => {
+    expect(build().args).toContain('title=Screen + Camera')
+    expect(build({ pip: null }).args).toContain('title=Screen')
   })
 })

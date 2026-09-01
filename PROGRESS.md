@@ -349,3 +349,29 @@ code signing, **CI has still never run** (account billing lock), manual release 
 | Windows code signing | ⏸ | Deferred to Phase 10. Recommendation: ship unsigned for v1.0 (conventional for OSS, genuinely $0). |
 | Recording consent framing | ⏸ | Needs user confirmation. `docs/legal.md` + first-run acknowledgement. |
 | Bangla UI localization | ⏸ | Infrastructure in Phase 9; shipping a translation for v1.0 is a separate call. |
+
+---
+
+## Camera picture-in-picture (2026-09-01)
+
+The camera can now be composited onto the screen track instead of only living beside it. Position
+(four corners) and size (10–40% of screen height) are chosen on the recording board, persisted as
+app settings, and the screen preview shows the live camera in the corner it will actually occupy.
+
+The camera **keeps its own raw track** — this is the design point, not a compromise (ADR-017). The
+stream count is identical with the overlay on or off, so segments stay concat-compatible (M-011),
+`detectCameraPresence` needed no change, and `session.ts` can fall back to no-overlay mid-recording
+and still produce a joinable file.
+
+Two mistakes came out of it, both now documented: `hwupload` is a property of the CHAIN and not of
+the encoder (M-036 — the composite worked on ddagrab and killed the recording on gdigrab), and a
+measurement harness that reads ffmpeg's numbers off stdout reports "could not measure" as a failed
+check (M-037).
+
+Verification: `npm run test:pip` (new) records twice through the real app, with the overlay on and
+off, and compares the overlay rectangle in `v:0` against the raw camera in `v:1` — 47.13 dB with,
+7.49 dB without. The control run is what makes the first number mean anything. Cost measured in
+B-013: +15 points of one core out of twelve, +23% on the screen track's bytes. lint 0, typecheck
+(3 projects), 231 unit tests.
+
+Still unreviewed visually, like the rest of the recent UI work.

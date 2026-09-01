@@ -1,4 +1,4 @@
-import { desktopCapturer } from 'electron'
+import { desktopCapturer, screen as electronScreen } from 'electron'
 import { spawn, type ChildProcessByStdio } from 'node:child_process'
 import type { Readable, Writable } from 'node:stream'
 import { mkdirSync, statSync, readdirSync, rmSync, existsSync } from 'node:fs'
@@ -9,7 +9,7 @@ import { QUALITY_PROFILES } from '@shared/schemas/capture'
 import type { QualityPreset } from '@shared/schemas/capture'
 import { AppError } from '@shared/errors'
 import { probeCapabilities } from '@main/platform/capability-probe'
-import { resolveBinary } from '@main/platform/binaries'
+import { resolveBinary, resolveResource } from '@main/platform/binaries'
 import * as meetings from '@main/db/repositories/meetings'
 import { classifyLevel, describeLevel } from '@shared/audio-levels'
 import { getSettings } from '@main/db/repositories/settings'
@@ -22,6 +22,7 @@ import {
 } from '@main/platform/storage'
 import { log } from '@main/log'
 import { buildCaptureArgs, MIC_FILTER, SYSTEM_FILTER } from './ffmpeg-builder'
+import { pipGeometry, type PipGeometry } from './pip'
 import { LoopbackBridge } from './loopback-bridge'
 import { concatSegments, diskFreeBytes, measureTrackLevels, probeDurationS } from './media-tools'
 
@@ -69,6 +70,12 @@ const QP_MEASURED_KBPS: Record<QualityPreset, number> = {
 }
 /** 3 x 10 s: long enough to ride out a transient statfs, short enough to salvage. */
 const DISK_PROBE_FAILURES_BEFORE_STOP = 3
+/**
+ * How early an ffmpeg death still counts as "the camera-overlay filter graph
+ * did not build". A bad graph fails before the first frame; anything later is
+ * a different problem and must not be blamed on the overlay.
+ */
+const PIP_FALLBACK_WINDOW_MS = 5000
 
 export interface SessionEvents {
   onStatus(status: SessionStatus): void
@@ -106,6 +113,17 @@ interface ActiveSession {
   lastStderrTail: string[]
   /** Which tracks are currently muted; survives the pause/resume respawn. */
   muted: { mic: boolean; system: boolean }
+  /**
+   * The camera overlay this recording was started with, or null for none.
+   *
+   * Read from settings ONCE, at start(), and never again — every respawn
+   * (pause/resume) reuses this. A setting changed mid-recording must not be
+   * able to change what later segments contain, or the file would no longer
+   * match the geometry recorded in capture_profile (M-031).
+   */
+  pip: { geometry: PipGeometry; maskPath: string } | null
+  /** Set once if the overlay had to be abandoned, so it is not retried forever. */
+  pipDegraded: boolean
   totalPcmDrops: number
   totalPcmBackpressure: number
   statusTimer: ReturnType<typeof setInterval>
@@ -125,6 +143,55 @@ export class SessionManager {
   /** Where new recordings go — the configured folder, or the default. */
   recordingsDir(): string {
     return recordingsRoot()
+  }
+
+  /**
+   * Physical height of the surface being captured, for sizing the overlay.
+   *
+   * desktopCapturer screen ids are `screen:<display id>:0`, so the display can
+   * be recovered exactly rather than by position in a list — the ordering caveat
+   * on `displayIndex` (R-06) does not apply here. Electron reports DIP, ddagrab
+   * captures physical pixels, hence the scaleFactor.
+   *
+   * Returns null for a window capture: a window's size is not knowable here and
+   * a guess dressed up as a measurement is worse than an honest default (the
+   * caller records which of the two it used).
+   */
+  private captureHeightPx(config: CaptureConfig): number | null {
+    if (!config.screen || config.screen.kind !== 'screen') return null
+    try {
+      const displayId = config.screen.sourceId.split(':')[1]
+      const displays = electronScreen.getAllDisplays()
+      const match = displays.find((d) => String(d.id) === displayId)
+      const target = match ?? electronScreen.getPrimaryDisplay()
+      const height = Math.round(target.size.height * (target.scaleFactor || 1))
+      return height > 0 ? height : null
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * The overlay this recording will use, resolved once. Null when the user has
+   * it off, when there is nothing to composite onto or with, or when the mask
+   * asset is missing — in every one of those cases the recording proceeds
+   * exactly as it did before the feature existed (Principle 3).
+   */
+  private resolvePip(config: CaptureConfig): { geometry: PipGeometry; maskPath: string } | null {
+    if (!config.screen || !config.camera) return null
+    const settings = getSettings()
+    const geometry = pipGeometry({
+      position: settings.cameraOverlay,
+      sizePct: settings.cameraOverlaySizePct,
+      screenHeightPx: this.captureHeightPx(config),
+    })
+    if (!geometry) return null
+    try {
+      return { geometry, maskPath: resolveResource('pip-mask-16x9.png') }
+    } catch (e) {
+      log.warn('capture', 'camera overlay disabled: mask asset missing', { error: String(e) })
+      return null
+    }
   }
 
   // ---- validation ---------------------------------------------------------
@@ -160,8 +227,13 @@ export class SessionManager {
     // how much the screen moves, which is the whole point of using QP.
     const screenK = config.screen ? QP_MEASURED_KBPS[config.preset] : 0
     const cameraK = config.camera ? Math.round(screenK * 0.35) : 0
+    // A camera burned into the screen track means that corner is never static,
+    // and quality-based encoding spends bits exactly where things move.
+    // Measured on REF-01, 20 s of 1080p15 with a moving source in the box:
+    // 3.86 MB without the overlay, 4.73 MB with it — +23% on the screen track.
+    const overlayK = this.resolvePip(config) ? Math.round(screenK * 0.23) : 0
     const audioK = profile.audioBitrateK * ((config.microphone ? 1 : 0) + (config.systemAudio ? 1 : 0))
-    const estimatedBytesPerHour = Math.round(((screenK + cameraK + audioK) * 1000 * 3600) / 8)
+    const estimatedBytesPerHour = Math.round(((screenK + cameraK + overlayK + audioK) * 1000 * 3600) / 8)
 
     let free = 0
     try {
@@ -239,6 +311,8 @@ export class SessionManager {
 
     const caps = await probeCapabilities()
     const encoder = caps.workingEncoders[0] ?? 'none'
+    // Resolved once, here, and carried on the session from now on (M-031).
+    const pip = this.resolvePip(config)
 
     meetings.createMeeting({
       id: meetingId,
@@ -257,6 +331,10 @@ export class SessionManager {
           : config.camera
             ? 'Camera only'
             : 'Audio only',
+        // What was burned into v:0, in the pixels it was burned at. The visual
+        // pipeline reads this to mask the region back out before scene
+        // detection, so it must describe the file rather than the setting.
+        cameraOverlay: pip?.geometry ?? null,
       },
       hasScreen: config.screen !== null,
       hasCamera: config.camera !== null,
@@ -282,6 +360,8 @@ export class SessionManager {
       encoder,
       lastStderrTail: [],
       muted: { mic: false, system: false },
+      pip,
+      pipDegraded: false,
       totalPcmDrops: 0,
       totalPcmBackpressure: 0,
       statusTimer: setInterval(() => this.events.onStatus(this.status()), 1000),
@@ -325,6 +405,8 @@ export class SessionManager {
       pcmPipePath: bridge?.pipePath ?? null,
       // Carried back in so resuming does not silently un-mute a track.
       muted: session.muted,
+      // From the session snapshot, never from settings — see ActiveSession.pip.
+      pip: session.pip,
     })
     session.encoder = built.encoder
 
@@ -367,6 +449,34 @@ export class SessionManager {
     })
     ffmpeg.on('exit', (code) => {
       if (this.active === session && session.run === run && session.phase === 'recording' && code !== 0 && code !== null) {
+        // Degrade, never break (Principle 3). A filter graph either builds or
+        // it does not, so an early death with the overlay on is worth one retry
+        // without it — and that retry is SAFE only because the overlay does not
+        // change the stream count, so the segments either side of it still
+        // concatenate (M-011). A failure an hour in is not the graph; it falls
+        // through to the normal failure path.
+        const ranMs = session.runStartedAt ? Date.now() - session.runStartedAt : 0
+        if (session.pip && !session.pipDegraded && ranMs < PIP_FALLBACK_WINDOW_MS) {
+          log.warn('capture', 'camera overlay failed — retrying without it', {
+            meetingId: session.meetingId,
+            code,
+            ranMs,
+            stderrTail: run.stderrTail.slice(-10),
+          })
+          session.pip = null
+          session.pipDegraded = true
+          run.bridge?.destroy()
+          session.lastStderrTail = run.stderrTail.slice(-20)
+          this.finalizeCurrentSegment(session)
+          session.accumulatedMs += ranMs
+          session.runStartedAt = null
+          session.run = null
+          this.lastWarnings.push(
+            'The camera could not be placed on the screen — it was recorded as its own separate track instead. The recording itself is fine.',
+          )
+          void this.spawnRun(session).catch((e) => this.fail(String(e)))
+          return
+        }
         // The stderr tail is the whole diagnosis. `frame= 0 ... Conversion
         // failed!` is what a rejected video chain looks like (M-021), and
         // before this it went nowhere at all (M-022).

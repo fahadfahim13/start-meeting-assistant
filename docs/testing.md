@@ -69,6 +69,7 @@ release PR:
 | Encoder | AMF · NVENC · QSV · libx264 forced |
 | Displays | single · dual same-DPI · dual mixed-DPI · HDR |
 | Camera | present · absent · unplugged mid-recording · in use by another app |
+| Camera overlay | each of the four corners · 10% and 40% · off · window capture (gdigrab, no d3d11 — M-036) · camera unplugged with the overlay on |
 | Audio | system audio present · silent · output device changed mid-recording · Bluetooth |
 | Storage | ample · near floor · exhausted mid-recording |
 | Power | AC · battery · battery with processing paused |

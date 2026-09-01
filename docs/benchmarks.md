@@ -379,3 +379,40 @@ stdin halfway through a 15 s recording.
 System track: **−20.1 dB before, −91.0 dB after** (digital silence). The microphone track was
 unaffected, both tracks remained in the file, and the segments still concatenated. No respawn,
 no gap. See M-034 for the exact command syntax, which is unforgiving about spacing.
+
+### B-013 — camera picture-in-picture: cost of compositing
+
+**Date:** 2026-09-01 · **Machine:** REF-01 (Ryzen 5 5500U, Vega 7, 15 W)
+
+Same capture both times: ddagrab display 0 at 1920x1080, 15 fps, h264_amf `-rc cqp -qp_i 30
+-qp_p 30`, a 640x480 moving source standing in for the camera, two encoded video streams, 20 s
+bounded with `-t`. Numbers from ffmpeg's own `-benchmark`.
+
+| | utime | stime | total CPU | of one core | output bytes |
+|---|---|---|---|---|---|
+| overlay off | 4.875 s | 1.656 s | 6.531 s | 32.3 % | 3,856,796 |
+| overlay on | 6.406 s | 3.219 s | 9.625 s | 47.6 % | 4,733,733 |
+| **delta** | +1.53 s | +1.56 s | **+3.09 s** | **+15.3 pts** | **+22.7 %** |
+
+Read the CPU figure against twelve threads, not one: +15 points of a single core is ~2.6 % of the
+machine. The overlay does **not** add an encode — there were two encoded video streams before and
+after, because the camera keeps its own track (ADR-017). What it adds is one `bgra→yuv420p`
+conversion on the screen chain, a scale/crop/pad of the camera copy, an alphamerge, and the blend.
+
+The +22.7 % on file size is the honest cost and is content-dependent, not overhead: quality-based
+rate control spends bits where the picture moves, and a corner that now contains a face is a corner
+that never holds still. A static webcam costs far less than the moving test pattern used here. The
+disk pre-flight in `session.ts` adds 23 % to the screen estimate when the overlay is on for exactly
+this reason.
+
+**Correctness, measured rather than asserted** (`npm run test:pip`, real camera, real app): the
+overlay rectangle in `v:0` compared against the raw camera track `v:1` at the same timestamp, inner
+80 % of the box so the border and rounded corners do not skew it —
+
+| | PSNR |
+|---|---|
+| overlay on | **47.13 dB** |
+| overlay off (control, same rectangle) | **7.49 dB** |
+
+The control run is the measurement that matters. Without it, a high number proves only that the
+region resembles a camera, not that the overlay put it there.

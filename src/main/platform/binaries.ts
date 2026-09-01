@@ -36,3 +36,23 @@ export function resolveBinary(name: BinaryName): string {
 
   throw new AppError('SYSTEM_BINARY_MISSING', `${exe} not found at ${bundled}`)
 }
+
+/** Non-executable files we ship beside the binaries. */
+export type ResourceName = 'pip-mask-16x9.png'
+
+/**
+ * Same rule as resolveBinary, for data assets: the path comes from app
+ * resources and nowhere else. There is no dev PATH fallback — an asset either
+ * ships with the app or it does not exist, and a caller that silently records
+ * without it would be worse than one that says so.
+ */
+export function resolveResource(name: ResourceName): string {
+  const file = app.isPackaged
+    ? path.join(process.resourcesPath, 'assets', name)
+    : path.join(app.getAppPath(), 'resources', 'assets', name)
+
+  if (!existsSync(file)) {
+    throw new AppError('SYSTEM_BINARY_MISSING', `${name} not found at ${file}`)
+  }
+  return file
+}

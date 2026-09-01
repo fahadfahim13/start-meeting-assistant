@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { DeviceInventory } from '@shared/schemas/devices'
+import type { InvokeResponse } from '@shared/ipc'
 import type { SessionStatus, ValidationResult } from '@shared/schemas/capture'
 import { QUALITY_PROFILES } from '@shared/schemas/capture'
 import { api } from './api'
@@ -16,10 +17,27 @@ export type { ConfigSource, Selection }
 import { startLoopback, type LoopbackHandle } from './audio/loopback'
 
 
+/**
+ * The camera-overlay controls live on the recording BOARD rather than in
+ * Settings — it is a framing decision you make while looking at the preview,
+ * next to the camera you are framing. It is still a persisted app setting, so
+ * the choice survives a restart; the board is just where it is edited.
+ *
+ * The union comes from the IPC contract rather than being retyped here, so the
+ * renderer cannot drift from what main will actually accept.
+ */
+type OverlaySettings = Pick<
+  InvokeResponse<'settings:get'>,
+  'cameraOverlay' | 'cameraOverlaySizePct'
+>
+export type OverlayPosition = OverlaySettings['cameraOverlay']
+
 interface AppState {
   inventory: DeviceInventory | null
   devicesError: string | null
   selection: Selection
+  /** Null until the first settings:get resolves. */
+  overlay: OverlaySettings | null
   validation: ValidationResult | null
   session: SessionStatus | null
   systemLevel: number
@@ -32,6 +50,8 @@ interface AppState {
   systemPreviewOn: boolean
 
   refreshDevices(): Promise<void>
+  loadOverlay(): Promise<void>
+  setOverlay(patch: Partial<OverlaySettings>): Promise<void>
   startSystemPreview(): Promise<void>
   stopSystemPreview(): void
   setMuted(track: 'mic' | 'system', muted: boolean): Promise<void>
@@ -69,6 +89,7 @@ export const useStore = create<AppState>((set, get) => {
       preset: 'balanced',
       title: '',
     },
+    overlay: null,
     validation: null,
     session: null,
     systemLevel: 0,
@@ -120,6 +141,32 @@ export const useStore = create<AppState>((set, get) => {
       } catch (e) {
         set({ devicesError: String(e) })
       }
+    },
+
+    async loadOverlay() {
+      const r = await api.invoke('settings:get', {})
+      if (r.ok) {
+        set({
+          overlay: {
+            cameraOverlay: r.data.cameraOverlay,
+            cameraOverlaySizePct: r.data.cameraOverlaySizePct,
+          },
+        })
+      }
+    },
+
+    async setOverlay(patch) {
+      const current = get().overlay
+      if (!current) return
+      const next = { ...current, ...patch }
+      // Optimistic: the control has to feel immediate, and main is the only
+      // writer — a rejected patch is corrected by the reload below.
+      set({ overlay: next })
+      await api.invoke('settings:set', patch)
+      await get().loadOverlay()
+      // The overlay changes what the screen track costs, so the size estimate
+      // in the footer is now stale.
+      void get().validate()
     },
 
     select(patch) {

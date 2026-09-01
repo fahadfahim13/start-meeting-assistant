@@ -27,7 +27,8 @@
     "test:qa": "node scripts/qa-test.mjs",
     "test:storage": "node scripts/storage-root-test.mjs",
     "diagnose:audio": "node scripts/audio-diagnose.mjs",
-    "test:features": "node scripts/feature-selftest.mjs"
+    "test:features": "node scripts/feature-selftest.mjs",
+    "test:pip": "electron-vite build && node scripts/pip-test.mjs"
   },
   "dependencies": {
     "sherpa-onnx-node": "^1.13.6",

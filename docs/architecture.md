@@ -104,6 +104,18 @@ Desktop ──Chromium WASAPI loopback──────────────
           → ffmpeg stdin                                       └ a:1 system (opus 64k)
 ```
 
+With the camera overlay on (ADR-017), the camera is decoded once and `split` two ways: a small
+rounded copy is composited into `v:0`, and the full raw camera still goes to `v:1`. The stream
+count is the same either way, which is what lets a recording fall back to no-overlay mid-flight
+and still concatenate.
+
+```
+Camera ──dshow──► fps ──split──┬─► scale 480 ───────────────────────────────► v:1 camera
+                               └─► scale+crop ─► pad(border) ─► alphamerge ─┐
+                                   mask.png ──► scale ─► gray ──────────────┘
+                                                                            └► overlay ─► v:0
+```
+
 Segments are 5 minutes each and independently playable, so a crash costs at most 5 minutes.
 On stop they are concatenated losslessly (`-c copy`).
 
