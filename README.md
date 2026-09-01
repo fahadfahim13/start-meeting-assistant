@@ -30,7 +30,20 @@ locally, indexed in a plain SQLite database on your disk.
   only ever on a slide.
 - **Summarizes** into key points, decisions and action items, each linked back to the moment it
   was said.
+- **Answers the questions you would have asked.** On request it turns a meeting into a short
+  Q&A briefing — what was decided, who is doing what, what is still open — each answer linked to
+  the moment it came from.
+- **Lets you fix what it misheard.** Click any line in the transcript to correct it; the search
+  index follows the correction. This matters most for mixed Bangla-English speech, which every
+  open model garbles at the switch points.
+- **Mark a moment while it happens.** One button during the recording flags the bit that
+  mattered, so you are not hunting for it in an hour of transcript later. Marked moments are
+  fed to the summarizer.
+- **Mute either audio track mid-recording** without stopping, and turn the camera, microphone
+  and system audio on or off independently before you start.
 - **Keeps it all searchable** across every meeting you have ever recorded.
+- **Writes plain files next to the video** — transcript as `.md`/`.srt`/`.json`, plus the
+  summary and the Q&A report — in a folder you choose. Nothing is locked inside the app.
 
 ## Privacy
 

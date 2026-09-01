@@ -39,7 +39,7 @@ Asserted in CI, not merely documented. Exceeding one fails the build.
 | Visual analysis, 1 h meeting | < 2 GB RAM, < 10 min |
 | Summarization, 1 h meeting | < 4 GB RAM, < 10 min |
 | Full pipeline, 1 h meeting | < 40 min |
-| Storage per recorded hour | < 2 GB |
+| Storage per recorded hour | < 0.5 GB (measured 0.26 at `high`; was 3.40 before quality-based encoding — B-011) |
 | Cold start to interactive | < 1.5 s |
 
 ## IPC security tests

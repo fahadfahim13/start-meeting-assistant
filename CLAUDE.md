@@ -120,7 +120,15 @@ npm run spike:1        # loopback audio spike
 npm run spike:2        # PCM -> ffmpeg pipe spike
 npm run spike:3        # whisper.cpp Vulkan benchmark
 npm run spike:4        # llama.cpp Vulkan benchmark
+
+npm run test:honesty   # synthetic silence/tone -> asserts pipeline outcome CODES
+npm run test:qa        # Q&A report content assertions on a real meeting
+npm run test:storage   # custom recordings folder, including the reset-to-default reversal
+npm run test:features  # transcript edit, speaker-name memory, markers, notes
+npm run diagnose:audio # play a known tone, record, prove system audio is captured
 ```
+
+Every harness that launches the app must go through `scripts/electron-run.mjs` — see M-030.
 
 ---
 
@@ -131,18 +139,46 @@ npm run spike:4        # llama.cpp Vulkan benchmark
 list virtualization) and `docs/testing.md` for the manual release gates still open
 (clean-VM install, Narrator pass, 3-hour recording).
 
-- 105 unit tests · 10+ E2E harnesses (recording, pause, crash recovery, sync,
-  transcription content, diarization, visual, summary, forced-software-encode,
-  packaged smoke) · 0 npm audit findings
+- **206 unit tests** · 14+ E2E/content harnesses (recording, pause, crash recovery, sync,
+  transcription content, diarization, visual, summary, Q&A, pipeline honesty, storage root,
+  feature self-test, forced-software-encode, packaged smoke) · 0 npm audit findings
 - Installer: `npx electron-builder --win` → release/. Packaged smoke:
   `MEETFROGE_SMOKE=1 release/win-unpacked/MeetFroge.exe` (result in %APPDATA%/MeetFroge/out/)
-- B-008 (whisper Vulkan) still awaits the build toolchain install.
+- **CI has never run.** The GitHub account is locked for a billing issue, so every workflow
+  exits in seconds without starting. Every result above is from local runs only.
+- **The current UI has not been visually reviewed.** Recent work (live system meter, mute
+  buttons, Q&A tab, folder picker, transcript editing, markers) is verified by measurement and
+  harnesses; nobody has looked at it rendered.
 
-### Things that will bite you (details in MISTAKES.md — 17 entries)
+### Things that will bite you (details in MISTAKES.md — 35 entries)
 
 - **Electron: no stdout on Windows** (M-004); packaged failures can be a modal
   Error dialog you cannot see — check window title + child-process tree (M-017).
+  `console.*` is banned in `src/main/**` by eslint for this reason (M-022).
+- **A stray Electron makes any harness pass without running** — the single-instance
+  lock means a second launch exits **0 without booting**. Go through
+  `scripts/electron-run.mjs`, which kills strays and asserts on a fresh artefact (M-030).
+- **h264_amf refuses frames under 128×128** and gdigrab captures a minimised window at its
+  tiny restored size — pad in the filter, never map a video source raw (M-021).
 - **h264_amf needs explicit nv12** on EVERY chain (M-001, M-007).
+- **Measure before you correct**: `volumedetect` after `loudnorm` reports the normaliser's
+  opinion, not the signal — it read a −53.5 dB mic as −19.8 dB (M-023).
+- **A stage returning `done` having produced nothing is a bug**, and a write path that
+  DELETES before it INSERTS must never be handed an empty set (M-024).
+- **Cleanup belongs in a stage that cannot be skipped**, and any "reset for re-run" must clear
+  the checkpoint or it resets the paperwork and keeps the wrong answer (M-025).
+- **Invisible control characters**: `\b` written through a shell heredoc lands as a literal
+  0x08 byte. Never author a regex through a heredoc; `no-control-regex` is not noise (M-026, M-028).
+- **A stored row must not depend on mutable settings to be interpreted** — record what was
+  true at the time (M-031).
+- **A capture path that can fail environmentally needs a LIVE pre-flight readout**, not just a
+  post-hoc warning (M-032).
+- **Fixed bitrate on screen content is the worst choice** — quality-based encoding is 13×
+  smaller for the same picture (M-033, B-011).
+- **ffmpeg accepts filter commands on stdin**: `cvolume@mic -1 volume 0`, no space after `c`,
+  time field required (M-034).
+- **Check that a documented mitigation exists** — R-07 claimed "transcript is editable" for
+  two phases while it was not (M-035).
 - **Exclusive devices**: previews release before recording (M-007); keep previewsSuspended.
 - **asar is read-only** — harness/app writes go to userData when packaged (M-017).
 - **Never hand-curate the node_modules closure** in electron-builder files (M-017).
