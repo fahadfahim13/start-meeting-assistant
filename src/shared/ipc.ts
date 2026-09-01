@@ -303,6 +303,7 @@ export const INVOKE_CHANNELS = {
       /** The folder exists and is writable right now (write-probed). */
       recordingsDirWritable: z.boolean(),
       writeSidecarFiles: z.boolean(),
+      outputFormat: z.enum(['mkv', 'mp4']),
       models: z.array(
         z.object({
           id: z.string(),
@@ -323,6 +324,7 @@ export const INVOKE_CHANNELS = {
       autoProcess: z.boolean().optional(),
       keyframeSensitivity: z.enum(['sensitive', 'balanced', 'sparse']).optional(),
       writeSidecarFiles: z.boolean().optional(),
+      outputFormat: z.enum(['mkv', 'mp4']).optional(),
       // NOTE: `recordingsDir` is deliberately absent. A filesystem path may
       // leave main in a RESPONSE but must never enter in a REQUEST — the folder
       // is set only by settings:chooseRecordingsFolder, which owns the dialog

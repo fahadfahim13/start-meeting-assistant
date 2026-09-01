@@ -12,6 +12,7 @@ import { probeCapabilities } from '@main/platform/capability-probe'
 import { resolveBinary } from '@main/platform/binaries'
 import * as meetings from '@main/db/repositories/meetings'
 import { classifyLevel, describeLevel } from '@shared/audio-levels'
+import { getSettings } from '@main/db/repositories/settings'
 import {
   currentRootKind,
   recordingsRoot,
@@ -267,7 +268,10 @@ export class SessionManager {
       meetingId,
       config,
       segmentDir,
-      finalPath: path.join(this.recordingsDir(), `${baseName}.mkv`),
+      // Segments stay .mkv regardless; only the finished file takes this
+      // extension. A half-written MP4 is unplayable — its index lives at the
+      // end — which is exactly the case crash recovery exists for.
+      finalPath: path.join(this.recordingsDir(), `${baseName}.${getSettings().outputFormat}`),
       phase: 'recording',
       run: null,
       nextSegmentNumber: 0,
@@ -483,7 +487,7 @@ export class SessionManager {
         .map((f) => path.join(session.segmentDir, f))
       if (segFiles.length === 0) throw new Error('no segments were written')
 
-      await concatSegments(segFiles, session.finalPath)
+      await concatSegments(segFiles, session.finalPath, getSettings().outputFormat)
       const durationS = await probeDurationS(session.finalPath)
       if (durationS === null) throw new Error('concatenated file is not playable')
 

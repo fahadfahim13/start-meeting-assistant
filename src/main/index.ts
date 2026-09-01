@@ -346,6 +346,7 @@ function bootstrap(): void {
       recordingsDirIsDefault: currentRootKind() === 'userData',
       recordingsDirWritable: rootAvailable().ok,
       writeSidecarFiles: s.writeSidecarFiles,
+      outputFormat: s.outputFormat,
       models: MODEL_IDS.map((id) => ({
         ...modelStatus(id),
         purpose: MODEL_REGISTRY[id].purpose,

@@ -46,7 +46,13 @@ export async function isPlayable(file: string): Promise<boolean> {
  * Segment paths are written to a list file; single quotes are escaped per the
  * concat demuxer's rules ('\'' sequence).
  */
-export function concatSegments(segmentPaths: string[], outputPath: string): Promise<void> {
+export type OutputFormat = 'mkv' | 'mp4'
+
+export function concatSegments(
+  segmentPaths: string[],
+  outputPath: string,
+  format: OutputFormat = 'mkv',
+): Promise<void> {
   return new Promise((resolve, reject) => {
     const listPath = path.join(path.dirname(outputPath), `concat-${Date.now()}.txt`)
     const escape = (p: string): string => p.replace(/'/g, "'\\''")
@@ -61,7 +67,17 @@ export function concatSegments(segmentPaths: string[], outputPath: string): Prom
         // "best" video and audio stream, silently dropping the camera track
         // and the second audio track (M-011).
         '-map', '0',
-        '-c', 'copy',
+        // MKV: a pure stream copy, so finalising is lossless and near-instant.
+        //
+        // MP4: the video is still copied — no re-encode, no quality change —
+        // but the audio is converted to AAC. Opus inside MP4 is legal and
+        // ffmpeg writes it happily, yet Windows Media Player, older players and
+        // several editors will not play it. Choosing MP4 is a choice about
+        // compatibility, so shipping a container half of them cannot open would
+        // defeat the point. Measured cost: ~18% more bytes on a 33 s recording.
+        ...(format === 'mp4'
+          ? ['-c:v', 'copy', '-c:a', 'aac', '-b:a', '128k']
+          : ['-c', 'copy']),
         outputPath,
       ],
       { timeout: 300_000, windowsHide: true },

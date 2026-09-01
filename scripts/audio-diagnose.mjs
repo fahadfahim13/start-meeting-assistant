@@ -15,15 +15,35 @@
  * Usage: node scripts/audio-diagnose.mjs [seconds]
  */
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import { DatabaseSync } from 'node:sqlite'
 import { ROOT, runApp, killStrays } from './electron-run.mjs'
 
 const SECONDS = Math.max(8, parseInt(process.argv[2] ?? '14', 10) || 14)
 const FFMPEG = path.join(ROOT, 'resources', 'bin', 'ffmpeg.exe')
 const APPDATA = process.env.APPDATA ?? ''
-const RECDIR = path.join(APPDATA, 'MeetFroge', 'recordings')
+/**
+ * Where recordings actually land — the user may have pointed them somewhere
+ * else. Reading the default folder blind is how this script reported
+ * "no recording was produced" for a recording that was written perfectly well
+ * to the configured one.
+ */
+function recordingsDir() {
+  try {
+    const db = new DatabaseSync(path.join(APPDATA, 'MeetFroge', 'meetfroge.db'), { readOnly: true })
+    const row = db.prepare("SELECT value FROM settings WHERE key = 'recordingsDir'").get()
+    db.close()
+    const configured = row ? JSON.parse(row.value) : null
+    if (configured) return configured
+  } catch {
+    /* no database yet, or no setting — fall through to the default */
+  }
+  return path.join(APPDATA, 'MeetFroge', 'recordings')
+}
+
+const RECDIR = recordingsDir()
 const TMP = path.join(os.tmpdir(), 'meetfroge-audio-diag')
 const TONE = path.join(TMP, 'tone.wav')
 const OUT = path.join(ROOT, 'out', 'e2e.json')
@@ -64,6 +84,7 @@ killStrays()
 mkdirSync(RECDIR, { recursive: true })
 const before = new Set(readdirSync(RECDIR).filter((f) => f.endsWith('.mkv')))
 
+process.stdout.write(`recordings folder: ${RECDIR}\n`)
 process.stdout.write(`playing a 600+900 Hz tone through the DEFAULT output device...\n`)
 const player = spawn(
   'powershell.exe',
@@ -100,7 +121,17 @@ const streams = execFileSync(
   { encoding: 'utf8' },
 )
 const audioCount = streams.split('\n').filter((l) => l.includes('audio')).length
-process.stdout.write(`audio tracks: ${audioCount}\n\n`)
+process.stdout.write(`audio tracks: ${audioCount}\n`)
+try {
+  const e2e = JSON.parse(readFileSync(OUT, 'utf8'))
+  if (typeof e2e.pcmDrops === 'number') {
+    // Frames the loopback ring discarded because ffmpeg was not consuming.
+    // Anything above zero means the system track is missing audio that the
+    // renderer did capture.
+    process.stdout.write(`pcm ring drops: ${e2e.pcmDrops}\n`)
+  }
+} catch { /* e2e.json is optional here */ }
+process.stdout.write('\n')
 
 const names = ['mic (you)', 'system (everyone else)']
 const results = []

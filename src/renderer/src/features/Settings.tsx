@@ -21,6 +21,7 @@ interface SettingsData {
   recordingsDirIsDefault: boolean
   recordingsDirWritable: boolean
   writeSidecarFiles: boolean
+  outputFormat: 'mkv' | 'mp4'
   models: ModelRow[]
   vulkan: boolean
 }
@@ -71,7 +72,12 @@ export default function Settings(): React.JSX.Element {
     p: Partial<
       Pick<
         SettingsData,
-        'defaultPreset' | 'language' | 'autoProcess' | 'keyframeSensitivity' | 'writeSidecarFiles'
+        | 'defaultPreset'
+        | 'language'
+        | 'autoProcess'
+        | 'keyframeSensitivity'
+        | 'writeSidecarFiles'
+        | 'outputFormat'
       >
     >,
   ): Promise<void> => {
@@ -104,6 +110,18 @@ export default function Settings(): React.JSX.Element {
           />
           {t.settings.autoProcess}
         </label>
+        <label>
+          {t.settings.outputFormat}
+          <select
+            value={data.outputFormat}
+            onChange={(e) => void patch({ outputFormat: e.target.value as 'mkv' | 'mp4' })}
+          >
+            <option value="mkv">{t.settings.formatMkv}</option>
+            <option value="mp4">{t.settings.formatMp4}</option>
+          </select>
+        </label>
+        <p className="hint">{t.settings.formatHint}</p>
+
         <label className="check">
           <input
             type="checkbox"

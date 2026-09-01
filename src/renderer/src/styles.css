@@ -246,6 +246,21 @@ video:focus-visible,
 }
 .qa-a button.link { margin-left: 6px; }
 
+/* A muted track has to be obvious at a glance — the whole complaint was that
+   during a recording you could not tell which one was muted. */
+.meter-row.muted .meter-track { opacity: 0.35; }
+.meter-muted-badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--amber);
+  border: 1px solid var(--amber);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+.meter-row { display: flex; align-items: center; gap: 8px; }
+.meter-row .ghost.small { padding: 2px 8px; }
+
 /* An off source reads as a deliberate choice, not a failure. */
 .preview-note.source-off {
   padding: 8px 10px;

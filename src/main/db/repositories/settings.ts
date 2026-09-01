@@ -28,6 +28,15 @@ export const SettingsSchema = z.object({
    * default, no lock-in).
    */
   writeSidecarFiles: z.boolean().default(true),
+  /**
+   * Container for the finished recording.
+   *
+   * Segments are ALWAYS Matroska while recording, whatever this says: MKV
+   * tolerates a truncated file, so a crash costs one segment rather than the
+   * whole meeting (Principle 2). Only the final concatenated file follows this
+   * setting.
+   */
+  outputFormat: z.enum(['mkv', 'mp4']).default('mkv'),
 })
 export type AppSettings = z.infer<typeof SettingsSchema>
 

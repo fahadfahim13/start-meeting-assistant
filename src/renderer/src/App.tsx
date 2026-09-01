@@ -31,14 +31,43 @@ function fmtElapsed(ms: number): string {
   return `${pad(h)}:${pad(m)}:${pad(sec)}`
 }
 
-function Meter({ level, label }: { level: number; label: string }): React.JSX.Element {
-  const pct = Math.min(100, level * 300)
+/**
+ * A level meter that also OWNS the mute control for its track.
+ *
+ * The mute buttons used to live in the footer next to the transport controls,
+ * where nothing showed which track they had affected — the footer read
+ * "RECORDING · 4.0 MB · h264_amf" and nothing else. Putting the control on the
+ * meter makes the state and the thing it controls the same object.
+ */
+function Meter({
+  level,
+  label,
+  muted,
+  onToggleMute,
+}: {
+  level: number
+  label: string
+  muted?: boolean
+  onToggleMute?: () => void
+}): React.JSX.Element {
+  const pct = muted ? 0 : Math.min(100, level * 300)
   return (
-    <div className="meter-row" role="meter" aria-label={`${label} level`} aria-valuenow={Math.round(pct)}>
+    <div
+      className={`meter-row ${muted ? 'muted' : ''}`}
+      role="meter"
+      aria-label={`${label} level${muted ? ', muted' : ''}`}
+      aria-valuenow={Math.round(pct)}
+    >
       <span className="meter-label">{label}</span>
       <div className="meter-track">
         <div className="meter-fill" style={{ width: `${pct}%`, background: level > 0.003 ? '#3fb950' : '#484f58' }} />
       </div>
+      {muted && <span className="meter-muted-badge">{t.preview.mutedBadge}</span>}
+      {onToggleMute && (
+        <button className="ghost small" aria-pressed={muted} onClick={onToggleMute}>
+          {muted ? t.preview.unmute : t.preview.mute}
+        </button>
+      )}
     </div>
   )
 }
@@ -388,7 +417,14 @@ export default function App(): React.JSX.Element {
             <p className="preview-note source-off">{t.preview.cameraOff}</p>
           )}
           {s.selection.microphoneEnabled && s.selection.microphoneDeviceId ? (
-            <Meter level={micLevel} label={t.preview.mic} />
+            <Meter
+              level={micLevel}
+              label={t.preview.mic}
+              muted={inSession ? s.session?.mutedMic : undefined}
+              onToggleMute={
+                inSession ? () => void s.setMuted('mic', !s.session?.mutedMic) : undefined
+              }
+            />
           ) : (
             <p className="preview-note source-off" aria-label={t.preview.micOff}>
               {t.preview.micOff}
@@ -396,7 +432,14 @@ export default function App(): React.JSX.Element {
           )}
           {s.selection.systemAudio ? (
             <>
-              <Meter level={s.systemLevel} label={t.preview.system} />
+              <Meter
+                level={s.systemLevel}
+                label={t.preview.system}
+                muted={inSession ? s.session?.mutedSystem : undefined}
+                onToggleMute={
+                  inSession ? () => void s.setMuted('system', !s.session?.mutedSystem) : undefined
+                }
+              />
               {!inSession && (
                 <p className={s.systemPreviewOn && s.systemLevel < 0.001 ? 'preview-note warn-note' : 'preview-note'}>
                   {s.systemPreviewOn && s.systemLevel < 0.001
@@ -474,7 +517,12 @@ export default function App(): React.JSX.Element {
                 <>
                   <span>{fmtBytes(s.session.bytesWritten)}</span>
                   <span>{s.session.encoderInUse}</span>
-                  {s.session.pcmDrops > 0 && (
+                  {/* Only warn when audio is genuinely flowing. With nothing
+                      playing, the loopback free-runs and the ring discards
+                      frames of silence — thousands of them — and reporting that
+                      as "audio frames dropped" reads like data loss when
+                      nothing was lost. */}
+                  {s.session.pcmDrops > 0 && s.systemLevel > 0.003 && (
                     <span className="drop-warning">{t.controls.dropWarning(s.session.pcmDrops)}</span>
                   )}
                 </>
@@ -488,39 +536,17 @@ export default function App(): React.JSX.Element {
           <button className="ghost" disabled={recording || s.busy} onClick={() => void s.validate()}>
             {t.controls.checkSetup}
           </button>
-          {inSession && s.session && (
-            <>
-              {/* Flagging the moment while it happens beats hunting for it in
-                  an hour of transcript afterwards. */}
-              <button
-                className="ghost"
-                onClick={() => {
-                  void api.invoke('session:marker', { label: null }).then((r) => {
-                    if (r.ok) setMarkerMsg(t.controls.markerAdded(r.data.total))
-                  })
-                }}
-              >
-                {t.controls.marker}
-              </button>
-              {s.session.mutedMic !== undefined && s.selection.microphoneEnabled && (
-                <button
-                  className="ghost"
-                  onClick={() => void s.setMuted('mic', !s.session!.mutedMic)}
-                  aria-pressed={s.session.mutedMic}
-                >
-                  {s.session.mutedMic ? t.controls.unmuteMic : t.controls.muteMic}
-                </button>
-              )}
-              {s.selection.systemAudio && (
-                <button
-                  className="ghost"
-                  onClick={() => void s.setMuted('system', !s.session!.mutedSystem)}
-                  aria-pressed={s.session.mutedSystem}
-                >
-                  {s.session.mutedSystem ? t.controls.unmuteSystem : t.controls.muteSystem}
-                </button>
-              )}
-            </>
+          {inSession && (
+            <button
+              className="ghost"
+              onClick={() => {
+                void api.invoke('session:marker', { label: null }).then((r) => {
+                  if (r.ok) setMarkerMsg(t.controls.markerAdded(r.data.total))
+                })
+              }}
+            >
+              {t.controls.marker}
+            </button>
           )}
           {!inSession ? (
             <button className="record" disabled={s.busy || !inv} onClick={() => void s.start()}>
