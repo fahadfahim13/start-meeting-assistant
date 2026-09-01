@@ -193,4 +193,31 @@ CREATE INDEX idx_qa_reports_meeting ON qa_reports(meeting_id, is_current);
 ALTER TABLE meetings ADD COLUMN media_root TEXT NOT NULL DEFAULT 'userData';
 `,
   },
+  {
+    version: 4,
+    sql: `
+-- Names the user has actually used for speakers, across all meetings.
+-- Speakers themselves stay per-meeting (a "Speaker 2" in one recording is not
+-- the same person as in another, and we do not do voice identification), but
+-- the NAMES are reused as suggestions so a recurring colleague is typed once
+-- rather than once per meeting.
+CREATE TABLE known_speakers (
+  name      TEXT PRIMARY KEY,
+  uses      INTEGER NOT NULL DEFAULT 1,
+  last_used INTEGER NOT NULL
+);
+
+-- Moments the user flagged WHILE recording. Written at the point of interest,
+-- when they know it matters, rather than reconstructed afterwards from an hour
+-- of transcript.
+CREATE TABLE markers (
+  id         TEXT PRIMARY KEY,
+  meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  at_ms      INTEGER NOT NULL,
+  label      TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_markers_meeting ON markers(meeting_id, at_ms);
+`,
+  },
 ]

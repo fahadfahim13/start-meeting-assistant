@@ -3,9 +3,9 @@ import { formatTimestamp, renderTranscript, toMd, toSrt, toVtt } from '../../src
 import type { TranscriptRow } from '../../src/main/db/repositories/transcripts'
 
 const rows: TranscriptRow[] = [
-  { id: '1', meeting_id: 'm', speaker_id: 's1', track: 'mic', start_ms: 0, end_ms: 2500, text: 'Hello everyone.', speaker_label: 'You' },
-  { id: '2', meeting_id: 'm', speaker_id: 's2', track: 'system', start_ms: 3000, end_ms: 7250, text: 'Hi, thanks for joining.', speaker_label: 'Others' },
-  { id: '3', meeting_id: 'm', speaker_id: 's1', track: 'mic', start_ms: 3_661_500, end_ms: 3_665_000, text: 'Wrapping up.', speaker_label: 'You' },
+  { id: '1', meeting_id: 'm', speaker_id: 's1', track: 'mic', start_ms: 0, end_ms: 2500, text: 'Hello everyone.', speaker_label: 'You', edited: 0 },
+  { id: '2', meeting_id: 'm', speaker_id: 's2', track: 'system', start_ms: 3000, end_ms: 7250, text: 'Hi, thanks for joining.', speaker_label: 'Others', edited: 0 },
+  { id: '3', meeting_id: 'm', speaker_id: 's1', track: 'mic', start_ms: 3_661_500, end_ms: 3_665_000, text: 'Wrapping up.', speaker_label: 'You', edited: 0 },
 ]
 
 describe('formatTimestamp', () => {

@@ -151,6 +151,16 @@ export async function summarizeMeeting(input: {
     .map((k) => `[t=${k.timestamp_ms}] on screen: ${(k.vlm_caption ?? '').slice(0, 120)}${k.ocr_text ? ` | text: ${k.ocr_text.slice(0, 120)}` : ''}`)
     .join('\n')
 
+  // Moments the user flagged DURING the meeting. This is the only signal in the
+  // whole pipeline that carries human judgement about what mattered — the rest
+  // is inference — so it is worth telling the model about explicitly.
+  const markerRows = db
+    .prepare('SELECT at_ms, label FROM markers WHERE meeting_id = ? ORDER BY at_ms LIMIT 30')
+    .all(input.meetingId) as unknown as { at_ms: number; label: string | null }[]
+  const markerContext = markerRows
+    .map((m) => `[t=${m.at_ms}]${m.label ? ` ${m.label.slice(0, 120)}` : ''}`)
+    .join('\n')
+
   // ---- map ---------------------------------------------------------------
   const allNotes: ChunkNotes[] = []
   for (let i = 0; i < chunks.length; i++) {
@@ -203,6 +213,9 @@ export async function summarizeMeeting(input: {
     `Produce the final meeting summary from these per-chunk notes.` +
     `\n<notes>\n${notesBlock}\n</notes>` +
     (visualContext ? `\n<screen_timeline>\n${visualContext}\n</screen_timeline>` : '') +
+    (markerContext
+      ? `\n<marked_moments>\nThe participant flagged these timestamps as important while the meeting was happening. Make sure the summary covers what was being discussed at each one.\n${markerContext}\n</marked_moments>`
+      : '') +
     `\nMerge duplicates. The title is a short specific name for the meeting. Keep "t" values on decisions and action items.`
 
   let degraded = false

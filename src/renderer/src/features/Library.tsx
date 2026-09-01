@@ -60,6 +60,7 @@ interface ActionItem {
 
 interface Segment {
   id: string
+  edited?: boolean
   startMs: number
   endMs: number
   speaker: string | null
@@ -123,6 +124,12 @@ export default function Library(): React.JSX.Element {
   const [actionItems, setActionItems] = useState<ActionItem[]>([])
   const [view, setView] = useState<'summary' | 'transcript' | 'qa'>('summary')
   const [qa, setQa] = useState<QaReport | null>(null)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editText, setEditText] = useState('')
+  const [notes, setNotes] = useState('')
+  const [notesMsg, setNotesMsg] = useState<string | null>(null)
+  const [markers, setMarkers] = useState<{ id: string; atMs: number; label: string | null }[]>([])
+  const [knownNames, setKnownNames] = useState<string[]>([])
   const [globalSearch, setGlobalSearch] = useState('')
   const [globalHits, setGlobalHits] = useState<{ meetingId: string; meetingTitle: string; kind: string; text: string; startMs: number }[] | null>(null)
   const [currentMs, setCurrentMs] = useState(0)
@@ -259,7 +266,34 @@ export default function Library(): React.JSX.Element {
     void api.invoke('qa:get', { meetingId: selected }).then((r) => {
       if (r.ok) setQa(r.data.report)
     })
+    void api.invoke('meetings:getNotes', { meetingId: selected }).then((r) => {
+      if (r.ok) setNotes(r.data.notes)
+    })
+    void api.invoke('markers:get', { meetingId: selected }).then((r) => {
+      if (r.ok) setMarkers(r.data.markers)
+    })
+    void api.invoke('speakers:known', {}).then((r) => {
+      if (r.ok) setKnownNames(r.data.names)
+    })
   }, [selected, items])
+
+  /**
+   * R-07 lists "transcript is editable" as the mitigation for code-switched
+   * Bengali-English. It was not, until now — a misheard word was permanent and
+   * flowed into the summary and the Q&A report.
+   */
+  const saveEdit = async (segmentId: string): Promise<void> => {
+    const text = editText.trim()
+    if (!text) return
+    const r = await api.invoke('transcript:edit', { segmentId, text })
+    if (r.ok && r.data.ok) {
+      setSegments((prev) => prev.map((x) => (x.id === segmentId ? { ...x, text, edited: true } : x)))
+      // The summary was built from the old wording; say so rather than let it
+      // silently disagree with the transcript above it.
+      setNotesMsg(t.library.reprocessAfterEdit)
+    }
+    setEditingId(null)
+  }
 
   const toggleAction = async (item: ActionItem): Promise<void> => {
     await api.invoke('actionitem:toggle', { actionItemId: item.id, done: !item.done })
@@ -268,7 +302,14 @@ export default function Library(): React.JSX.Element {
 
   const renameSpeaker = async (seg: Segment): Promise<void> => {
     if (!seg.speakerId || !selected) return
-    const name = window.prompt(t.library.renamePrompt(seg.speaker ?? seg.track), seg.speaker ?? '')
+    // Speakers are per-meeting by design (no voice identification), but the
+    // NAMES carry over so a recurring colleague is typed once, not once per
+    // meeting.
+    const suggestions = knownNames.length ? `\n\nUsed before: ${knownNames.slice(0, 8).join(', ')}` : ''
+    const name = window.prompt(
+      t.library.renamePrompt(seg.speaker ?? seg.track) + suggestions,
+      seg.speaker ?? '',
+    )
     if (!name || !name.trim()) return
     await api.invoke('speakers:rename', { speakerId: seg.speakerId, displayName: name.trim().slice(0, 80) })
     const r = await api.invoke('transcript:get', { meetingId: selected })
@@ -569,12 +610,89 @@ export default function Library(): React.JSX.Element {
                 when a summary already existed, so the one situation where you
                 need it - there is no summary - was the one where it was
                 missing. */}
-            <button
-              className="ghost small"
-              onClick={() => selected && void api.invoke('summary:regenerate', { meetingId: selected })}
-            >
-              {t.library.regenerate}
-            </button>
+            <div className="export-group">
+              <button
+                className="ghost small"
+                onClick={() => selected && void api.invoke('summary:regenerate', { meetingId: selected })}
+              >
+                {t.library.regenerate}
+              </button>
+              {summary && (
+                <>
+                  <span className="hint">{t.library.exportSummary}</span>
+                  {(['md', 'txt', 'json'] as const).map((f) => (
+                    <button
+                      key={f}
+                      className="ghost small"
+                      onClick={() => {
+                        if (!selected) return
+                        void api.invoke('summary:export', { meetingId: selected, format: f }).then((r) => {
+                          if (r.ok) {
+                            setExportMsg(
+                              r.data.saved ? t.library.exportSaved(r.data.fileName ?? '') : t.library.exportCancelled,
+                            )
+                          }
+                        })
+                      }}
+                    >
+                      {f}
+                    </button>
+                  ))}
+                </>
+              )}
+            </div>
+
+            {/* Moments the user flagged DURING the meeting — written when they
+                knew it mattered, not reconstructed from the transcript later. */}
+            <h4>{t.library.markers}</h4>
+            {markers.length === 0 ? (
+              <p className="preview-note">{t.library.noMarkers}</p>
+            ) : (
+              <ul className="marker-list">
+                {markers.map((m) => (
+                  <li key={m.id}>
+                    <button
+                      className="link"
+                      onClick={() => {
+                        setView('transcript')
+                        seekTo(m.atMs)
+                      }}
+                    >
+                      {fmtClock(m.atMs)}
+                    </button>
+                    {m.label && <span>{m.label}</span>}
+                    <button
+                      className="link"
+                      onClick={() => {
+                        void api.invoke('markers:delete', { markerId: m.id }).then(() =>
+                          setMarkers((prev) => prev.filter((x) => x.id !== m.id)),
+                        )
+                      }}
+                    >
+                      {t.library.markerDelete}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {/* The `notes` column has existed since the v1 schema and nothing
+                ever read or wrote it. This is the place for what a recording
+                cannot capture. */}
+            <h4>{t.library.notes}</h4>
+            <textarea
+              className="meeting-notes"
+              value={notes}
+              placeholder={t.library.notesPlaceholder}
+              onChange={(e) => setNotes(e.target.value)}
+              onBlur={() => {
+                if (!selected) return
+                void api.invoke('meetings:setNotes', { meetingId: selected, notes }).then((r) => {
+                  if (r.ok && r.data.ok) setNotesMsg(t.library.notesSaved)
+                })
+              }}
+            />
+            {notesMsg && <p className="export-msg">{notesMsg}</p>}
           </div>
         )}
         {selected && view === 'qa' && (
@@ -682,7 +800,45 @@ export default function Library(): React.JSX.Element {
               >
                 {s.speaker ?? s.track}
               </button>
-              <span className="seg-text">{s.text}</span>
+              {editingId === s.id ? (
+                <span className="seg-edit">
+                  <textarea
+                    value={editText}
+                    autoFocus
+                    onChange={(e) => setEditText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') setEditingId(null)
+                      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) void saveEdit(s.id)
+                    }}
+                  />
+                  <button className="ghost small" onClick={() => void saveEdit(s.id)}>
+                    {t.library.saveEdit}
+                  </button>
+                  <button className="ghost small" onClick={() => setEditingId(null)}>
+                    {t.library.cancelEdit}
+                  </button>
+                </span>
+              ) : (
+                <span
+                  className="seg-text seg-editable"
+                  role="button"
+                  tabIndex={0}
+                  title={t.library.editHint}
+                  onClick={() => {
+                    setEditingId(s.id)
+                    setEditText(s.text)
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      setEditingId(s.id)
+                      setEditText(s.text)
+                    }
+                  }}
+                >
+                  {s.text}
+                  {s.edited && <span className="seg-edited">{t.library.edited}</span>}
+                </span>
+              )}
             </div>
           ))}
         </div>

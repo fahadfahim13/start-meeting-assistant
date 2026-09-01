@@ -10,12 +10,14 @@ import { recoverInterrupted, type RecoveryReport } from './capture/recovery'
 import { getDb, closeDb } from './db'
 import { initTray, updateTray, destroyTray } from './tray'
 import { createPipeline, PROCESSING_STAGES } from './pipeline'
-import { renderQa, renderTranscript } from './pipeline/export'
+import { renderQa, renderTranscript, summaryToMd, type SummaryExport } from './pipeline/export'
 import * as meetingsRepo from './db/repositories/meetings'
 import * as transcriptsRepo from './db/repositories/transcripts'
+import * as markersRepo from './db/repositories/markers'
 import { getSettings, patchSettings } from './db/repositories/settings'
 import { verifyBinaries } from './security/integrity'
 import { log, redactPaths } from './log'
+import { AppError } from '@shared/errors'
 import { MODEL_IDS, modelStatus, modelsDir, type ModelId } from './platform/models'
 import { MODEL_REGISTRY } from './platform/model-registry'
 import { cancelDownload, downloadModel } from './platform/model-downloader'
@@ -171,6 +173,7 @@ function bootstrap(): void {
       certain: r.speaker_certain === 1,
       track: r.track,
       text: r.text,
+      edited: r.edited === 1,
     })),
   }))
 
@@ -182,6 +185,73 @@ function bootstrap(): void {
       startMs: h.start_ms,
     })),
   }))
+
+  handle('transcript:edit', async ({ segmentId, text }) => ({
+    ok: transcriptsRepo.editSegment(segmentId, text),
+  }))
+
+  handle('speakers:known', async () => ({ names: transcriptsRepo.knownSpeakerNames() }))
+
+  handle('meetings:getNotes', async ({ meetingId }) => ({
+    notes: meetingsRepo.getMeeting(meetingId)?.notes ?? '',
+  }))
+
+  handle('meetings:setNotes', async ({ meetingId, notes }) => {
+    if (!meetingsRepo.getMeeting(meetingId)) return { ok: false }
+    meetingsRepo.setNotes(meetingId, notes)
+    return { ok: true }
+  })
+
+  handle('markers:get', async ({ meetingId }) => ({
+    markers: markersRepo.markersFor(meetingId).map((m) => ({ id: m.id, atMs: m.at_ms, label: m.label })),
+  }))
+
+  handle('markers:delete', async ({ markerId }) => {
+    markersRepo.deleteMarker(markerId)
+    return { ok: true }
+  })
+
+  handle('session:marker', async ({ label }) => {
+    const status = sessions.status()
+    if (!status.meetingId) throw new AppError('CAPTURE_NOT_ACTIVE')
+    // Anchored to elapsed recording time, so it still points at the right
+    // moment after pauses are excised from the final file.
+    markersRepo.addMarker(status.meetingId, status.elapsedMs, label)
+    return { atMs: status.elapsedMs, total: markersRepo.markersFor(status.meetingId).length }
+  })
+
+  handle('summary:export', async ({ meetingId, format }) => {
+    const meeting = meetingsRepo.getMeeting(meetingId)
+    if (!meeting) return { saved: false, fileName: null }
+    const row = getDb()
+      .prepare('SELECT content FROM summaries WHERE meeting_id = ? AND is_current = 1')
+      .get(meetingId) as unknown as { content: string } | undefined
+    if (!row) return { saved: false, fileName: null }
+    let content: string
+    try {
+      const summary = JSON.parse(row.content) as SummaryExport
+      const actionItems = (
+        getDb()
+          .prepare('SELECT text, assignee, source_ms FROM action_items WHERE meeting_id = ?')
+          .all(meetingId) as unknown as { text: string; assignee: string | null; source_ms: number | null }[]
+      ).map((a) => ({ text: a.text, assignee: a.assignee, t: a.source_ms }))
+      content =
+        format === 'json'
+          ? JSON.stringify({ version: 1, summary, actionItems }, null, 2)
+          : summaryToMd(summary, meeting.title, actionItems)
+    } catch {
+      return { saved: false, fileName: null }
+    }
+    const { dialog } = await import('electron')
+    const safeName = meeting.title.replace(/[<>:"/\\|?*]/g, '_').slice(0, 80)
+    const result = await dialog.showSaveDialog({
+      defaultPath: `${safeName}-summary.${format}`,
+      filters: [{ name: format.toUpperCase(), extensions: [format] }],
+    })
+    if (result.canceled || !result.filePath) return { saved: false, fileName: null }
+    writeFileSync(result.filePath, content, 'utf8')
+    return { saved: true, fileName: path.basename(result.filePath) }
+  })
 
   handle('transcript:export', async ({ meetingId, format }) => {
     const meeting = meetingsRepo.getMeeting(meetingId)
@@ -620,6 +690,86 @@ function bootstrap(): void {
     // button), so the normal harness path cannot reach it.
     const qaMeeting = process.env['MEETFROGE_QA_MEETING']
     if (qaMeeting) void qaAndExit(qaMeeting)
+
+    // Self-test hook: exercise the transcript-edit / marker / notes / speaker
+    // paths against a synthetic meeting and dump the result. These four have no
+    // natural harness — editing needs a transcript, which needs real speech —
+    // so without this they would ship verified only by the type checker.
+    if (process.env['MEETFROGE_SELFTEST'] === 'features') {
+      void (async () => {
+        const outDir = harnessOutDir()
+        mkdirSync(outDir, { recursive: true })
+        const checks: { name: string; ok: boolean; detail?: string }[] = []
+        const db = getDb()
+        const meetingId = (await import('node:crypto')).randomUUID()
+        try {
+          meetingsRepo.createMeeting({
+            id: meetingId,
+            title: 'Feature self-test',
+            mediaPath: 'recordings/selftest.mkv',
+            mediaRoot: 'userData',
+            captureProfile: { selftest: true },
+            hasScreen: false,
+            hasCamera: false,
+            hasMic: true,
+            hasSystemAudio: false,
+          })
+          const speakerId = transcriptsRepo.ensureSpeaker(meetingId, 'mic', 'You', true)
+          transcriptsRepo.replaceTrackSegments(meetingId, 'mic', speakerId, 'en', [
+            { startMs: 1000, endMs: 3000, text: 'prepare the job discounts by Friday' },
+          ])
+
+          const seg = transcriptsRepo.transcriptFor(meetingId)[0]
+          checks.push({ name: 'segment created', ok: Boolean(seg) })
+
+          // 1. transcript editing + FTS resync
+          const corrected = 'prepare the job descriptions by Friday'
+          const edited = transcriptsRepo.editSegment(seg!.id, corrected)
+          const after = transcriptsRepo.transcriptFor(meetingId)[0]
+          checks.push({ name: 'edit applied', ok: edited && after?.text === corrected, detail: after?.text })
+          checks.push({ name: 'edit flagged', ok: after?.edited === 1 })
+          const hitsNew = transcriptsRepo.searchTranscripts('descriptions')
+          const hitsOld = transcriptsRepo.searchTranscripts('discounts')
+          checks.push({
+            name: 'search index follows the correction',
+            ok: hitsNew.some((h) => h.meeting_id === meetingId) && !hitsOld.some((h) => h.meeting_id === meetingId),
+          })
+
+          // 2. speaker names remembered across meetings
+          transcriptsRepo.renameSpeaker(speakerId, 'Ronny')
+          checks.push({
+            name: 'speaker name remembered globally',
+            ok: transcriptsRepo.knownSpeakerNames().includes('Ronny'),
+          })
+
+          // 3. markers
+          markersRepo.addMarker(meetingId, 4200, 'budget decision')
+          const markers = markersRepo.markersFor(meetingId)
+          checks.push({ name: 'marker stored', ok: markers.length === 1 && markers[0]!.at_ms === 4200 })
+
+          // 4. notes on the previously-dead column
+          meetingsRepo.setNotes(meetingId, 'follow up with finance')
+          checks.push({
+            name: 'notes persisted',
+            ok: meetingsRepo.getMeeting(meetingId)?.notes === 'follow up with finance',
+          })
+
+          // cleanup so the Library is not left with a fake meeting
+          db.prepare('DELETE FROM meetings WHERE id = ?').run(meetingId)
+          checks.push({
+            name: 'cleanup cascades markers',
+            ok: markersRepo.markersFor(meetingId).length === 0,
+          })
+        } catch (e) {
+          checks.push({ name: 'threw', ok: false, detail: String(e).slice(0, 300) })
+        }
+        writeFileSync(
+          path.join(outDir, 'selftest.json'),
+          JSON.stringify({ selftest: true, date: new Date().toISOString(), checks }, null, 2),
+        )
+        app.quit()
+      })()
+    }
 
     // Maintenance hook: delete EVERY meeting through the same code path the
     // Library's delete button uses, and report per-meeting outcomes. Destructive

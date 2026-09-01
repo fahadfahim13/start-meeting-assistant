@@ -919,3 +919,37 @@ the untouched microphone track was unaffected and the file still concatenated wi
 **Rule:** before redesigning around a limitation, check whether the tool already exposes a
 control channel. And when a CLI documents a command format, test the exact spacing — ffmpeg's own
 error message was the thing that revealed the required time field.
+
+---
+
+## M-035 — the documented mitigation for the project's hardest problem did not exist
+
+**Date:** 2026-09-01  **Area:** docs vs reality  **Cost:** every misheard word was permanent, and
+carried into the summary and the Q&A report
+**Symptom:** asked what was missing, a sweep of the feature surface against the documentation
+found that `docs/risks.md` R-07 — *Banglish transcription accuracy*, filed as **probability
+high** and described in ROADMAP as "the hardest open problem for this project's actual usage" —
+lists its mitigation as:
+
+> Default `-l en` keeps meeting substance intact (ADR-004). Per-meeting language override.
+> **Transcript is editable.** The UI states the limitation plainly.
+
+The transcript was not editable. There was no `transcript:edit` channel, no repository function,
+no UI. The IPC surface offered `transcript:get`, `transcript:search` and `transcript:export` —
+read, read, read.
+**Cause:** PROGRESS.md Phase 3 records "Transcript UI (search, exports, job badges) ✅ … inline
+edit deferred to Phase 7 polish". Phase 7 shipped without it, and the risk register was never
+reconciled against what actually existed. The `edited` column had been sitting in the v1 schema
+since the beginning with nothing ever writing to it — the schema knew, the code did not.
+**Fix:** `editSegment()` updates the text, sets `edited = 1`, and rewrites the FTS row **in the
+same transaction** — a search index still holding the old wording would return hits for text no
+longer on screen. Click any line in the transcript to correct it; corrected lines are marked as
+corrected, and the UI says the summary should be regenerated to match, because it was built from
+the old wording.
+**Verified:** `npm run test:features` — a synthetic meeting is created, a segment is corrected,
+and the search index is asserted to match the NEW text and no longer the old.
+**Rule:** a risk register that lists a mitigation is making a claim about the code. Check that
+the mitigation exists — a documented mitigation nobody implemented is worse than an
+acknowledged gap, because it stops anyone from looking. Three of this project's own deferred
+items ("inline edit", "export md/pdf/docx", "bulk operations") were quietly load-bearing
+somewhere else in the docs.

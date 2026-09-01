@@ -86,6 +86,7 @@ export default function App(): React.JSX.Element {
   const [preview, setPreview] = useState<PreviewState>({ kind: 'idle', url: null })
   // Keyed by content so a NEW set of warnings reappears after being dismissed.
   const [dismissedWarnings, setDismissedWarnings] = useState('')
+  const [markerMsg, setMarkerMsg] = useState<string | null>(null)
 
   // Live preview of the SELECTED screen/window — so what gets recorded (and
   // therefore what the summary is built from) is visible before pressing
@@ -478,6 +479,7 @@ export default function App(): React.JSX.Element {
                   )}
                 </>
               )}
+              {markerMsg && <span className="marker-msg">{markerMsg}</span>}
               {s.session.error && <span className="drop-warning">{s.session.error.slice(0, 120)}</span>}
             </>
           )}
@@ -488,6 +490,18 @@ export default function App(): React.JSX.Element {
           </button>
           {inSession && s.session && (
             <>
+              {/* Flagging the moment while it happens beats hunting for it in
+                  an hour of transcript afterwards. */}
+              <button
+                className="ghost"
+                onClick={() => {
+                  void api.invoke('session:marker', { label: null }).then((r) => {
+                    if (r.ok) setMarkerMsg(t.controls.markerAdded(r.data.total))
+                  })
+                }}
+              >
+                {t.controls.marker}
+              </button>
               {s.session.mutedMic !== undefined && s.selection.microphoneEnabled && (
                 <button
                   className="ghost"

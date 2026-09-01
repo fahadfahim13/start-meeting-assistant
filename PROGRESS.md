@@ -321,6 +321,27 @@ onek besi"*.
 | Mute mic / system **during** recording | ✅ done | **M-034** — ffmpeg accepts a filter command on the stdin already used for `q`: `cvolume@mic -1 volume 0` (no space after `c`, time field required). Named volume filters mean the track is silenced, never removed, so segments stay concatenable (M-011). Verified live: −20.1 dB → −91.0 dB mid-recording, mic unaffected |
 | File size | ✅ 13× smaller | **M-033 / B-011** — every preset moved from fixed bitrate to quality-based rate control. `high` end-to-end: **3.40 → 0.26 GB/hour**, same 1080p30, same tracks |
 
+## Post-v0.1.0 round 3 - gap review, 2026-09-01
+
+Asked what was missing for daily use. The sharpest finding was a documentation claim rather than
+a bug: **R-07 listed "transcript is editable" as the mitigation for Banglish accuracy, and it was
+not** (M-035). The `edited` column had existed unused since the v1 schema.
+
+| Gap | Status | Notes |
+|---|---|---|
+| Transcript editing | done | Click a line to correct it. FTS row rewritten in the same transaction, line marked as edited, UI prompts to regenerate the summary. Makes R-07's stated mitigation real |
+| Speaker names per meeting | done | `known_speakers` (migration v4). Speakers stay per-meeting - no voice identification is claimed - but the NAMES are offered as suggestions, so a recurring colleague is typed once |
+| No summary export | done | `summary:export` md/txt/json, matching transcript and Q&A. The sidecar file already existed; the button did not |
+| `meetings.notes` column dead | done | In the schema since v1, never read or written. Now a notes field per meeting |
+| No way to flag a moment live | done | `markers` table (migration v4) + a Mark-moment button while recording. Anchored to elapsed time so pauses do not shift it, shown in the Library, and fed to the summarizer as the only human-judgement signal in the pipeline |
+
+Verification: `npm run test:features` (new) - exercises all four against the real database and
+cleans up after itself. lint 0, typecheck (3 projects), 206 unit tests.
+
+Still open: R-11 (~1 s mic-system skew), live transcript (ADR-006, v1.1), auto-update, disk
+retention policy, bulk operations, list virtualization, encryption at rest, Bangla UI,
+code signing, **CI has still never run** (account billing lock), manual release gates.
+
 ### Open items (non-blocking)
 
 | Item | Status | Notes |

@@ -204,6 +204,34 @@ video:focus-visible,
 }
 .folder-actions { display: flex; gap: 6px; }
 
+/* An edited line is marked, so a corrected transcript is visibly a corrected
+   transcript rather than silently different from what was said. */
+.seg-editable { cursor: text; }
+.seg-editable:hover { background: rgba(110, 118, 129, 0.12); border-radius: 4px; }
+.seg-edited {
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  font-style: italic;
+}
+.seg-edit { display: flex; gap: 6px; align-items: flex-start; flex: 1; }
+.seg-edit textarea {
+  flex: 1;
+  min-height: 48px;
+  font: inherit;
+  resize: vertical;
+}
+.marker-list { list-style: none; padding: 0; margin: 0 0 12px; }
+.marker-list li { display: flex; gap: 8px; align-items: baseline; margin: 3px 0; }
+.meeting-notes {
+  width: 100%;
+  min-height: 90px;
+  font: inherit;
+  resize: vertical;
+  margin-bottom: 8px;
+}
+.marker-msg { color: var(--amber); }
+
 /* Q&A report: the question carries the scan, the answer the substance. */
 .qa-pair { margin-bottom: 14px; }
 .qa-q {

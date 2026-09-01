@@ -39,8 +39,11 @@ Code-switched Bengali-English is the hardest case for every open ASR model. Whis
 language mid-sentence and garbles switch points.
 
 **Mitigation.** Default `-l en` keeps meeting substance intact (ADR-004). Per-meeting language
-override. Transcript is editable. **The UI states the limitation plainly** — this is part of the
-feature, not a disclaimer. Improving this is tracked in ROADMAP under consideration.
+override. **Transcript is editable** — click any line to correct it; the search index follows the
+correction and the line is marked as edited. That claim was in this entry from the start and was
+**untrue until 2026-09-01**; see MISTAKES.md M-035. **The UI states the limitation plainly** —
+this is part of the feature, not a disclaimer. Improving the model side is tracked in ROADMAP
+under consideration.
 
 ### R-08 · Disk exhaustion 🟡
 

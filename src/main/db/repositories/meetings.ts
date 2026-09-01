@@ -24,6 +24,8 @@ export interface MeetingRow {
   has_camera: number
   has_mic: number
   has_system_audio: number
+  /** Free-text notes the user typed themselves. */
+  notes: string | null
 }
 
 export interface SegmentRow {
@@ -116,4 +118,17 @@ export function segmentsFor(meetingId: string): SegmentRow[] {
   return getDb()
     .prepare('SELECT * FROM segments WHERE meeting_id = ? ORDER BY seq')
     .all(meetingId) as unknown as SegmentRow[]
+}
+
+/**
+ * The user's own notes on a meeting.
+ *
+ * The column has existed since the v1 schema and nothing ever read or wrote it
+ * — a place to record what the transcript cannot, like why a decision was made
+ * or what to do about it.
+ */
+export function setNotes(meetingId: string, notes: string): void {
+  getDb()
+    .prepare('UPDATE meetings SET notes = ?, updated_at = ? WHERE id = ?')
+    .run(notes.slice(0, 20_000), Date.now(), meetingId)
 }

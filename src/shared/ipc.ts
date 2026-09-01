@@ -126,6 +126,8 @@ export const INVOKE_CHANNELS = {
           certain: z.boolean(),
           track: z.string(),
           text: z.string(),
+          /** True once the user has corrected this line by hand. */
+          edited: z.boolean(),
         }),
       ),
     }),
@@ -137,6 +139,14 @@ export const INVOKE_CHANNELS = {
         z.object({ meetingId: z.string(), segmentId: z.string(), text: z.string(), startMs: z.number() }),
       ),
     }),
+  },
+  // R-07 names "transcript is editable" as the mitigation for code-switched
+  // Bengali-English, which whisper garbles at language switch points. It was
+  // not editable until now; a misheard word was permanent and carried into the
+  // summary and the Q&A report.
+  'transcript:edit': {
+    request: z.object({ segmentId: z.string().uuid(), text: z.string().min(1).max(5000) }),
+    response: z.object({ ok: z.boolean() }),
   },
   'transcript:export': {
     // The renderer names a FORMAT, never a path — main opens a save dialog.
@@ -198,6 +208,36 @@ export const INVOKE_CHANNELS = {
   // ---- Q&A report -------------------------------------------------------
   // Generated on demand, not as part of automatic processing: the user asked
   // for a button, and a report nobody opened is minutes of inference wasted.
+  'summary:export': {
+    request: z.object({ meetingId: z.string().uuid(), format: z.enum(['md', 'txt', 'json']) }),
+    response: z.object({ saved: z.boolean(), fileName: z.string().nullable() }),
+  },
+  'meetings:setNotes': {
+    request: z.object({ meetingId: z.string().uuid(), notes: z.string().max(20_000) }),
+    response: z.object({ ok: z.boolean() }),
+  },
+  'meetings:getNotes': {
+    request: z.object({ meetingId: z.string().uuid() }),
+    response: z.object({ notes: z.string() }),
+  },
+  // Flag a moment WHILE recording, when you know it matters — rather than
+  // hunting for it in an hour of transcript afterwards.
+  'session:marker': {
+    request: z.object({ label: z.string().max(200).nullable() }),
+    response: z.object({ atMs: z.number().int().min(0), total: z.number().int().min(0) }),
+  },
+  'markers:get': {
+    request: z.object({ meetingId: z.string().uuid() }),
+    response: z.object({
+      markers: z.array(
+        z.object({ id: z.string(), atMs: z.number().int(), label: z.string().nullable() }),
+      ),
+    }),
+  },
+  'markers:delete': {
+    request: z.object({ markerId: z.string().uuid() }),
+    response: z.object({ ok: z.boolean() }),
+  },
   'qa:get': {
     request: z.object({ meetingId: z.string().uuid() }),
     response: z.object({
@@ -319,6 +359,11 @@ export const INVOKE_CHANNELS = {
   'models:cancel': {
     request: z.object({ modelId: z.string().max(64) }),
     response: z.object({ ok: z.boolean() }),
+  },
+  /** Names used before, so a recurring colleague is typed once, not per meeting. */
+  'speakers:known': {
+    request: z.object({}),
+    response: z.object({ names: z.array(z.string().max(80)).max(50) }),
   },
   'speakers:rename': {
     request: z.object({ speakerId: z.string().uuid(), displayName: z.string().min(1).max(80) }),

@@ -11,6 +11,8 @@ export interface TranscriptRow {
   start_ms: number
   end_ms: number
   text: string
+  /** 1 once the user has corrected this line by hand (R-07's mitigation). */
+  edited: number
   speaker_label?: string | null
   speaker_certain?: number | null
 }
@@ -136,8 +138,66 @@ export function applyDiarization(meetingId: string, assignments: (number | null)
   return updated
 }
 
+/**
+ * Correct a transcript segment's text.
+ *
+ * docs/risks.md R-07 lists "transcript is editable" as the mitigation for
+ * code-switched Bengali-English, which whisper garbles at switch points. It was
+ * not editable — the `edited` column existed from the v1 schema and nothing
+ * ever wrote to it, so a misheard word was permanent and carried through into
+ * the summary and the Q&A report.
+ *
+ * The FTS row is rewritten in the same transaction: a search index that still
+ * holds the old wording would quietly return hits for text no longer on screen.
+ */
+export function editSegment(segmentId: string, text: string): boolean {
+  const db = getDb()
+  const row = db
+    .prepare('SELECT meeting_id FROM transcript_segments WHERE id = ?')
+    .get(segmentId) as unknown as { meeting_id: string } | undefined
+  if (!row) return false
+
+  db.exec('BEGIN')
+  try {
+    db.prepare('UPDATE transcript_segments SET text = ?, edited = 1 WHERE id = ?').run(text, segmentId)
+    db.prepare('DELETE FROM transcript_fts WHERE segment_id = ?').run(segmentId)
+    db.prepare('INSERT INTO transcript_fts (text, meeting_id, segment_id) VALUES (?, ?, ?)').run(
+      text,
+      row.meeting_id,
+      segmentId,
+    )
+    db.exec('COMMIT')
+  } catch (e) {
+    db.exec('ROLLBACK')
+    throw e
+  }
+  return true
+}
+
+/** Names used before, most-used first — offered when renaming a speaker. */
+export function knownSpeakerNames(limit = 20): string[] {
+  return (
+    getDb()
+      .prepare('SELECT name FROM known_speakers ORDER BY uses DESC, last_used DESC LIMIT ?')
+      .all(limit) as unknown as { name: string }[]
+  ).map((r) => r.name)
+}
+
+function rememberSpeakerName(name: string): void {
+  getDb()
+    .prepare(
+      `INSERT INTO known_speakers (name, uses, last_used) VALUES (?, 1, ?)
+       ON CONFLICT(name) DO UPDATE SET uses = uses + 1, last_used = excluded.last_used`,
+    )
+    .run(name, Date.now())
+}
+
 export function renameSpeaker(speakerId: string, displayName: string): void {
   getDb().prepare('UPDATE speakers SET display_name = ? WHERE id = ?').run(displayName, speakerId)
+  // Speakers stay per-meeting — we do not claim the same voice across
+  // recordings — but the NAME is worth remembering so a recurring colleague is
+  // typed once instead of once per meeting.
+  rememberSpeakerName(displayName)
 }
 
 export interface SpeakerRow {
